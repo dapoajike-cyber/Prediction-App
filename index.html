@@ -389,15 +389,7 @@ function TexasYieldExplorer() {
               <button style={{ ...btnPrimary, width: '100%', marginTop: 8 }} onClick={runPrediction} disabled={predicting || !activeModel}>
                 {predicting ? 'Predicting…' : 'Predict yield'}
               </button>
-              {!activeModel && (
-                <div style={{ fontSize: 12, color: COLORS.rust, marginTop: 6 }}>
-                  No trained model for this combination.
-                  <div style={{ marginTop: 4, fontFamily: 'monospace', fontSize: 11, color: COLORS.inkSoft }}>
-                    Debug: crop="{crop}" region="{region}" window={String(windowCount)} (type: {typeof windowCount}) yield_type="{yieldType}"
-                    <br/>Available for this crop: {JSON.stringify(modelsForCrop.map(m => `${m.region}|${m.window_months_count}(${typeof m.window_months_count})|${m.yield_type}`))}
-                  </div>
-                </div>
-              )}
+              {!activeModel && <div style={{ fontSize: 12, color: COLORS.rust, marginTop: 6 }}>No trained model for this combination.</div>}
               {predictError && <div style={{ fontSize: 12, color: COLORS.rust, marginTop: 6 }}>{predictError}</div>}
             </div>
           )}
