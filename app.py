@@ -36,8 +36,11 @@ from flask_cors import CORS
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CROPS = ['Corn', 'Cotton']
 
-# Base URL where all model_*.joblib files were uploaded as GitHub Release assets.
-MODEL_BASE_URL = 'https://github.com/dapoajike-cyber/Prediction-App/releases/download/V1'
+# Base URL where all model_*.joblib files live -- uploaded directly into the
+# main branch of the repo (they're small enough now, ~1-11MB each, unlike the
+# old single big files per crop). Using raw.githubusercontent.com serves the
+# actual file content directly, same as a normal file download.
+MODEL_BASE_URL = 'https://raw.githubusercontent.com/dapoajike-cyber/Prediction-App/main'
 
 # How many models to keep cached in memory at once. Each is a handful of MB,
 # so this stays well within free-tier memory limits.
