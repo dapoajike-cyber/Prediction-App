@@ -89,33 +89,50 @@ def find_meta_entry(crop, region, window_months_count, yield_type):
 
 def get_model_entry(crop, region, window_months_count, yield_type):
     """Loads a model on demand, downloading it first if necessary. Caches a
-    small number of recently-used models in memory; evicts the oldest when full."""
+    small number of recently-used models in memory; evicts the oldest when full.
+    Returns (entry, error_message) -- error_message is None on success, and
+    distinguishes 'not in catalog' from 'found in catalog but download failed'."""
     meta_entry = find_meta_entry(crop, region, window_months_count, yield_type)
     if meta_entry is None:
-        return None
+        return None, (f'No trained model for crop={crop}, region={region}, '
+                       f'window={window_months_count} months, yield_type={yield_type}.')
 
     filename = meta_entry.get('model_filename')
     if not filename:
-        return None
+        return None, f'Catalog entry found but has no model_filename recorded.'
 
     if filename in MODEL_CACHE:
-        MODEL_CACHE.move_to_end(filename)  # mark as recently used
-        return MODEL_CACHE[filename]
+        MODEL_CACHE.move_to_end(filename)
+        return MODEL_CACHE[filename], None
 
     filepath = os.path.join(BASE_DIR, filename)
     if not os.path.exists(filepath):
         url = f'{MODEL_BASE_URL}/{filename}'
         print(f'Downloading {filename} from {url} ...')
         try:
-            urllib.request.urlretrieve(url, filepath)
+            # GitHub's raw content server can reject requests with no User-Agent
+            # header -- urlretrieve()'s default request doesn't send one, so we
+            # build the request explicitly instead.
+            req = urllib.request.Request(url, headers={'User-Agent': 'texas-yield-explorer/1.0'})
+            with urllib.request.urlopen(req, timeout=30) as response:
+                if response.status != 200:
+                    raise RuntimeError(f'HTTP {response.status} from {url}')
+                data = response.read()
+            with open(filepath, 'wb') as f:
+                f.write(data)
+            print(f'  Downloaded {filename} ({len(data)/1024:.0f} KB)')
         except Exception as e:
             print(f'  ERROR downloading {filename}: {e}')
-            return None
+            return None, f'Model was found in the catalog but could not be downloaded ({e}).'
 
-    entry = joblib.load(filepath)
+    try:
+        entry = joblib.load(filepath)
+    except Exception as e:
+        print(f'  ERROR loading {filename}: {e}')
+        if os.path.exists(filepath):
+            os.remove(filepath)  # remove a possibly-corrupt partial download
+        return None, f'Model file downloaded but could not be loaded ({e}).'
 
-    # Evict oldest cached model(s) if we are at capacity, and remove the file
-    # from disk too so it does not accumulate across many different requests.
     while len(MODEL_CACHE) >= MAX_CACHED_MODELS:
         old_filename, _ = MODEL_CACHE.popitem(last=False)
         old_path = os.path.join(BASE_DIR, old_filename)
@@ -123,7 +140,7 @@ def get_model_entry(crop, region, window_months_count, yield_type):
             os.remove(old_path)
 
     MODEL_CACHE[filename] = entry
-    return entry
+    return entry, None
 
 
 @app.route('/meta', methods=['GET'])
@@ -146,10 +163,9 @@ def predict():
     climate = data.get('climate', {})
     co2_ppm = data.get('co2_ppm')
 
-    entry = get_model_entry(crop, region, window_months_count, yield_type)
+    entry, error = get_model_entry(crop, region, window_months_count, yield_type)
     if entry is None:
-        return jsonify({'detail': f'No trained model for crop={crop}, region={region}, '
-                                   f'window={window_months_count} months, yield_type={yield_type}.'}), 404
+        return jsonify({'detail': error}), 404
 
     feat_cols = entry['feat_cols']
     row = []
@@ -195,10 +211,9 @@ def predict_year():
     yield_type = data.get('yield_type', 'Overall_Yield')
     year = data.get('year')
 
-    entry = get_model_entry(crop, region, window_months_count, yield_type)
+    entry, error = get_model_entry(crop, region, window_months_count, yield_type)
     if entry is None:
-        return jsonify({'detail': f'No trained model for crop={crop}, region={region}, '
-                                   f'window={window_months_count} months, yield_type={yield_type}.'}), 404
+        return jsonify({'detail': error}), 404
 
     trend = CLIMATE_TREND.get(crop, [])
     if not trend:
