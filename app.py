@@ -1,12 +1,17 @@
 """
-Texas Yield Explorer — Flask backend for SmarterASP.NET hosting.
+Texas Yield Explorer — Flask backend (Render-ready).
 
 This does NOT train anything. It loads the model files produced by
 TexasYieldExplorer_TrainAndExport.ipynb (run once in Colab) and serves
 predictions from them.
 
-Expected files in the same folder as this script (from deploy_package.zip):
-  models_Corn.joblib, models_Cotton.joblib
+Small files (json, requirements.txt, this script) live directly in the GitHub
+repo. The two large model files (models_Corn.joblib, models_Cotton.joblib) are
+NOT in the repo -- GitHub blocks/discourages files that large in normal commits.
+Instead they are attached to a GitHub Release, and this script downloads them
+automatically the first time it starts up, if they are not already present.
+
+Expected small files in the same folder as this script:
   counties_Corn.json, counties_Cotton.json
   meta_Corn.json, meta_Cotton.json
   climate_trend_Corn.json, climate_trend_Cotton.json
@@ -14,6 +19,7 @@ Expected files in the same folder as this script (from deploy_package.zip):
 
 import os
 import json
+import urllib.request
 import joblib
 import numpy as np
 from flask import Flask, request, jsonify
@@ -22,8 +28,35 @@ from flask_cors import CORS
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CROPS = ['Corn', 'Cotton']
 
+# Direct-download URLs for the large model files, from the GitHub Release.
+# Update these if you ever publish a new release with a different tag.
+MODEL_DOWNLOAD_URLS = {
+    'Corn': 'https://github.com/dapoajike-cyber/Prediction-App/releases/download/V1/models_Corn.joblib',
+    'Cotton': 'https://github.com/dapoajike-cyber/Prediction-App/releases/download/V1/models_Cotton.joblib',
+}
+
 app = Flask(__name__)
 CORS(app)  # allow the web app (hosted separately or elsewhere) to call this API
+
+
+def ensure_model_file(crop):
+    """Downloads the model file for this crop if it isn't already on disk."""
+    models_path = os.path.join(BASE_DIR, f'models_{crop}.joblib')
+    if os.path.exists(models_path):
+        return models_path
+    url = MODEL_DOWNLOAD_URLS.get(crop)
+    if not url:
+        return None
+    print(f'Downloading {crop} model from {url} ...')
+    try:
+        urllib.request.urlretrieve(url, models_path)
+        size_mb = os.path.getsize(models_path) / (1024 * 1024)
+        print(f'  Downloaded models_{crop}.joblib ({size_mb:.1f} MB)')
+        return models_path
+    except Exception as e:
+        print(f'  ERROR downloading {crop} model: {e}')
+        return None
+
 
 # ---- Load everything once, at startup ----
 MODELS = {}          # crop -> {key: {'model', 'scaler', 'feat_cols', 'n'}}
@@ -32,13 +65,14 @@ COUNTIES = {}        # crop -> list of dicts
 CLIMATE_TREND = {}   # crop -> list of yearly records
 
 for crop in CROPS:
-    models_path = os.path.join(BASE_DIR, f'models_{crop}.joblib')
+    models_path = ensure_model_file(crop)
     meta_path = os.path.join(BASE_DIR, f'meta_{crop}.json')
     counties_path = os.path.join(BASE_DIR, f'counties_{crop}.json')
     trend_path = os.path.join(BASE_DIR, f'climate_trend_{crop}.json')
 
-    if not os.path.exists(models_path):
-        print(f'WARNING: {models_path} not found — {crop} will be unavailable until uploaded.')
+    if not models_path or not os.path.exists(models_path):
+        print(f'WARNING: model file for {crop} could not be found or downloaded — '
+              f'{crop} will be unavailable.')
         continue
 
     MODELS[crop] = joblib.load(models_path)
@@ -173,5 +207,6 @@ def health():
 
 
 if __name__ == '__main__':
-    # For local testing only. On SmarterASP.NET, IIS/wfastcgi runs this via web.config instead.
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    # Render sets the PORT environment variable; default to 5000 for local testing.
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
