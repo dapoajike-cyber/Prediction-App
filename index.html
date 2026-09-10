@@ -318,13 +318,29 @@ function TexasYieldExplorer() {
           {connStatus === 'connected' && (
             <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18, height: 'fit-content' }}>
               <Field label="Crop">
-                <select style={selectStyle} value={crop} onChange={(e) => { setCrop(e.target.value); setResult(null); }}>
+                <select style={selectStyle} value={crop} onChange={(e) => {
+                  const newCrop = e.target.value;
+                  setCrop(newCrop); setResult(null);
+                  const models = meta.available_models.filter((m) => m.crop === newCrop);
+                  const first = models[0];
+                  if (first) { setRegion(first.region); setWindowCount(first.window_months_count); }
+                }}>
                   <option value="Cotton">Cotton</option>
                   <option value="Corn">Corn</option>
                 </select>
               </Field>
               <Field label="Region">
-                <select style={selectStyle} value={region} onChange={(e) => { setRegion(e.target.value); setResult(null); }}>
+                <select style={selectStyle} value={region} onChange={(e) => {
+                  const newRegion = e.target.value;
+                  setRegion(newRegion); setResult(null);
+                  const windowsForNewRegion = modelsForCrop
+                    .filter((m) => m.region === newRegion)
+                    .map((m) => m.window_months_count)
+                    .sort((a, b) => a - b);
+                  if (windowsForNewRegion.length && !windowsForNewRegion.includes(windowCount)) {
+                    setWindowCount(windowsForNewRegion[0]);
+                  }
+                }}>
                   {regionsAvailable.map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
               </Field>
