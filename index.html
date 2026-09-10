@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Texas Yield Explorer</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+<style>
+  body { margin: 0; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+
+const FONT_HEAD = "'Fraunces', Georgia, serif";
+const FONT_BODY = "'IBM Plex Sans', system-ui, sans-serif";
+
+const COLORS = {
+  bg: '#EDEFE6',
+  panel: '#F7F8F2',
+  ink: '#2B2420',
+  inkSoft: '#5B5245',
+  border: '#D3D3C2',
+  gold: '#B8862F',
+  goldDeep: '#8A6423',
+  teal: '#3C6E71',
+  tealDeep: '#284A4C',
+  olive: '#5B7B3B',
+  rust: '#A63D2F',
+  cream: '#FBFAF5',
+};
+
+const COUNTY_LAYOUT = {
+  'High Plains': {
+    color: COLORS.gold,
+    counties: [
+      { name: 'Deaf Smith', x: 0, y: 0 }, { name: 'Parmer', x: 1, y: 0 },
+      { name: 'Castro', x: 2, y: 0 }, { name: 'Swisher', x: 3, y: 0 },
+      { name: 'Bailey', x: 0, y: 1 }, { name: 'Lamb', x: 1, y: 1 },
+      { name: 'Hale', x: 2, y: 1 }, { name: 'Floyd', x: 3, y: 1 },
+      { name: 'Cochran', x: 0, y: 2 }, { name: 'Hockley', x: 1, y: 2 },
+      { name: 'Lubbock', x: 2, y: 2 }, { name: 'Crosby', x: 3, y: 2 },
+    ],
+  },
+  'North Central': {
+    color: COLORS.teal,
+    counties: [
+      { name: 'Wilbarger', x: 0.5, y: 3.2 }, { name: 'Baylor', x: 1.5, y: 3.2 },
+      { name: 'Knox', x: 2.5, y: 3.2 }, { name: 'Haskell', x: 0.5, y: 4.1 },
+      { name: 'Foard', x: 1.5, y: 4.1 }, { name: 'Hardeman', x: 2.5, y: 4.1 },
+    ],
+  },
+  'South Central': {
+    color: COLORS.olive,
+    counties: [
+      { name: 'Wharton', x: 0.5, y: 5.4 }, { name: 'Victoria', x: 1.5, y: 5.4 },
+      { name: 'Nueces', x: 0.5, y: 6.3 }, { name: 'San Patricio', x: 1.5, y: 6.3 },
+      { name: 'Bee', x: 2.5, y: 5.4 }, { name: 'Refugio', x: 2.5, y: 6.3 },
+    ],
+  },
+};
+
+function Field({ label, children }) {
+  return (
+    <label style={{ display: 'block', marginBottom: 14 }}>
+      <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 5, fontFamily: FONT_BODY }}>
+        {label}
+      </div>
+      {children}
+    </label>
+  );
+}
+
+const selectStyle = {
+  width: '100%',
+  padding: '9px 10px',
+  fontSize: 14,
+  fontFamily: FONT_BODY,
+  color: COLORS.ink,
+  background: COLORS.cream,
+  border: `1px solid ${COLORS.border}`,
+  borderRadius: 6,
+};
+
+const inputStyle = { ...selectStyle };
+
+const btnPrimary = {
+  padding: '11px 18px',
+  fontSize: 14,
+  fontFamily: FONT_BODY,
+  fontWeight: 500,
+  color: '#fff',
+  background: COLORS.tealDeep,
+  border: 'none',
+  borderRadius: 6,
+  cursor: 'pointer',
+};
+
+const btnGhost = {
+  ...btnPrimary,
+  background: 'transparent',
+  color: COLORS.tealDeep,
+  border: `1px solid ${COLORS.tealDeep}`,
+};
+
+function TexasYieldExplorer() {
+  const [backendUrl, setBackendUrl] = React.useState('');
+  const [connStatus, setConnStatus] = React.useState('disconnected');
+  const [connError, setConnError] = React.useState('');
+  const [meta, setMeta] = React.useState(null);
+
+  const [crop, setCrop] = React.useState('Cotton');
+  const [region, setRegion] = React.useState('All Texas');
+  const [windowCount, setWindowCount] = React.useState(null);
+  const [yieldType, setYieldType] = React.useState('Overall_Yield');
+  const [mode, setMode] = React.useState('manual');
+  const [climateValues, setClimateValues] = React.useState({});
+  const [targetYear, setTargetYear] = React.useState(2029);
+
+  const [result, setResult] = React.useState(null);
+  const [predicting, setPredicting] = React.useState(false);
+  const [predictError, setPredictError] = React.useState('');
+
+  const [counties, setCounties] = React.useState(null);
+  const [hovered, setHovered] = React.useState(null);
+
+  const modelsForCrop = React.useMemo(() => {
+    if (!meta) return [];
+    return meta.available_models.filter((m) => m.crop === crop);
+  }, [meta, crop]);
+
+  const regionsAvailable = React.useMemo(
+    () => [...new Set(modelsForCrop.map((m) => m.region))],
+    [modelsForCrop]
+  );
+
+  const windowsAvailable = React.useMemo(
+    () =>
+      [...new Set(modelsForCrop.filter((m) => m.region === region).map((m) => m.window_months_count))].sort(
+        (a, b) => a - b
+      ),
+    [modelsForCrop, region]
+  );
+
+  const activeModel = React.useMemo(
+    () =>
+      modelsForCrop.find(
+        (m) => m.region === region && m.window_months_count === windowCount && m.yield_type === yieldType
+      ),
+    [modelsForCrop, region, windowCount, yieldType]
+  );
+
+  async function connect() {
+    if (!backendUrl.trim()) {
+      setConnError('Enter the backend URL first.');
+      return;
+    }
+    setConnStatus('connecting');
+    setConnError('');
+    try {
+      const res = await fetch(`${backendUrl.replace(/\/$/, '')}/meta`);
+      if (!res.ok) throw new Error(`Server responded with ${res.status}`);
+      const data = await res.json();
+      setMeta(data);
+      setConnStatus('connected');
+      const first = data.available_models.find((m) => m.crop === crop);
+      if (first) {
+        setRegion(first.region);
+        setWindowCount(first.window_months_count);
+      }
+    } catch (e) {
+      setConnStatus('error');
+      setConnError('Could not reach the backend. Check the URL and make sure the service is running (it may take up to a minute to wake up if it has been idle).');
+    }
+  }
+
+  async function loadCounties() {
+    if (connStatus !== 'connected') return;
+    try {
+      const res = await fetch(`${backendUrl.replace(/\/$/, '')}/counties?crop=${crop}`);
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      const lookup = {};
+      data.forEach((row) => {
+        lookup[row.County] = row;
+      });
+      setCounties(lookup);
+    } catch {
+      setCounties(null);
+    }
+  }
+
+  React.useEffect(() => {
+    if (connStatus === 'connected') loadCounties();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connStatus, crop]);
+
+  async function runPrediction() {
+    if (!activeModel) {
+      setPredictError('No trained model for this combination.');
+      return;
+    }
+    setPredicting(true);
+    setPredictError('');
+    setResult(null);
+    try {
+      const base = backendUrl.replace(/\/$/, '');
+      let res;
+      if (mode === 'year') {
+        res = await fetch(`${base}/predict_year`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            crop, region, window_months_count: windowCount, yield_type: yieldType, year: Number(targetYear),
+          }),
+        });
+      } else {
+        const missing = activeModel.feature_columns.filter(
+          (c) => c !== 'CO2_ppm' && (climateValues[c] === undefined || climateValues[c] === '')
+        );
+        if (missing.length) {
+          setPredictError(`Enter a value for: ${missing.join(', ')}`);
+          setPredicting(false);
+          return;
+        }
+        const climate = {};
+        activeModel.feature_columns.forEach((c) => {
+          if (c !== 'CO2_ppm') climate[c] = Number(climateValues[c]);
+        });
+        res = await fetch(`${base}/predict`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ crop, region, window_months_count: windowCount, yield_type: yieldType, climate }),
+        });
+      }
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.detail || `Server responded with ${res.status}`);
+      }
+      const data = await res.json();
+      setResult(data);
+    } catch (e) {
+      setPredictError(e.message || 'Prediction failed.');
+    } finally {
+      setPredicting(false);
+    }
+  }
+
+  function hexToRgb(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+
+  function mixColor(c1, c2, t) {
+    const a = hexToRgb(c1), b = hexToRgb(c2);
+    const r = Math.round(a.r + (b.r - a.r) * t);
+    const g = Math.round(a.g + (b.g - a.g) * t);
+    const bl = Math.round(a.b + (b.b - a.b) * t);
+    return `rgb(${r},${g},${bl})`;
+  }
+
+  function yieldColor(county) {
+    const row = counties?.[county];
+    if (!row) return COLORS.border;
+    const v = row[`${yieldType}_mean`];
+    if (v == null) return COLORS.border;
+    const max = crop === 'Cotton' ? 900 : 160;
+    const t = Math.max(0, Math.min(1, v / max));
+    const stops = [COLORS.rust, COLORS.gold, COLORS.olive];
+    const idx = t < 0.5 ? 0 : 1;
+    const localT = t < 0.5 ? t / 0.5 : (t - 0.5) / 0.5;
+    return mixColor(stops[idx], stops[idx + 1], localT);
+  }
+
+  const tile = 78, gap = 6;
+
+  return (
+    <div style={{ background: COLORS.bg, minHeight: '100%', fontFamily: FONT_BODY, color: COLORS.ink, padding: '28px 20px' }}>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500&display=swap" />
+
+      <div style={{ maxWidth: 960, margin: '0 auto' }}>
+        <h1 style={{ fontFamily: FONT_HEAD, fontSize: 30, fontWeight: 500, margin: '0 0 4px' }}>
+          Texas yield explorer
+        </h1>
+        <p style={{ fontSize: 14, color: COLORS.inkSoft, margin: '0 0 24px', maxWidth: 560 }}>
+          Predict corn and cotton yield from climate inputs, using the trained random forest models. Connect to the backend below to run real predictions.
+        </p>
+
+        <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18, marginBottom: 20 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 280px' }}>
+              <Field label="Backend URL">
+                <input
+                  style={inputStyle}
+                  placeholder="https://your-backend.onrender.com"
+                  value={backendUrl}
+                  onChange={(e) => setBackendUrl(e.target.value)}
+                />
+              </Field>
+            </div>
+            <button style={btnPrimary} onClick={connect}>
+              {connStatus === 'connecting' ? 'Connecting…' : 'Connect'}
+            </button>
+          </div>
+          <div style={{ marginTop: 8, fontSize: 13 }}>
+            {connStatus === 'connected' && (
+              <span style={{ color: COLORS.olive }}>● Connected — {meta?.available_models?.length ?? 0} models available</span>
+            )}
+            {connStatus === 'error' && <span style={{ color: COLORS.rust }}>● {connError}</span>}
+            {connStatus === 'disconnected' && <span style={{ color: COLORS.inkSoft }}>Not connected yet</span>}
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: connStatus === 'connected' ? '280px 1fr' : '1fr', gap: 20 }}>
+          {connStatus === 'connected' && (
+            <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18, height: 'fit-content' }}>
+              <Field label="Crop">
+                <select style={selectStyle} value={crop} onChange={(e) => { setCrop(e.target.value); setResult(null); }}>
+                  <option value="Cotton">Cotton</option>
+                  <option value="Corn">Corn</option>
+                </select>
+              </Field>
+              <Field label="Region">
+                <select style={selectStyle} value={region} onChange={(e) => { setRegion(e.target.value); setResult(null); }}>
+                  {regionsAvailable.map((r) => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </Field>
+              <Field label="Growing-season window">
+                <select style={selectStyle} value={windowCount ?? ''} onChange={(e) => { setWindowCount(Number(e.target.value)); setResult(null); }}>
+                  {windowsAvailable.map((w) => {
+                    const m = modelsForCrop.find((mm) => mm.region === region && mm.window_months_count === w);
+                    return <option key={w} value={w}>{m?.window_label ?? `${w} months`}</option>;
+                  })}
+                </select>
+              </Field>
+              <Field label="Yield type">
+                <select style={selectStyle} value={yieldType} onChange={(e) => { setYieldType(e.target.value); setResult(null); }}>
+                  <option value="Overall_Yield">Overall</option>
+                  <option value="Irrigated_Yield">Irrigated</option>
+                  <option value="NonIrrigated_Yield">Non-irrigated</option>
+                </select>
+              </Field>
+
+              <div style={{ display: 'flex', gap: 6, margin: '14px 0' }}>
+                <button style={mode === 'manual' ? btnPrimary : btnGhost} onClick={() => setMode('manual')}>Enter climate</button>
+                <button style={mode === 'year' ? btnPrimary : btnGhost} onClick={() => setMode('year')}>Pick a year</button>
+              </div>
+
+              {mode === 'manual' && activeModel && (
+                <div style={{ maxHeight: 260, overflowY: 'auto', paddingRight: 4 }}>
+                  {activeModel.feature_columns.filter((c) => c !== 'CO2_ppm').map((col) => (
+                    <Field key={col} label={col.replace('_', ' — ')}>
+                      <input
+                        style={inputStyle}
+                        type="number"
+                        value={climateValues[col] ?? ''}
+                        onChange={(e) => setClimateValues((v) => ({ ...v, [col]: e.target.value }))}
+                      />
+                    </Field>
+                  ))}
+                </div>
+              )}
+
+              {mode === 'year' && (
+                <Field label="Year to predict">
+                  <input style={inputStyle} type="number" value={targetYear} onChange={(e) => setTargetYear(e.target.value)} />
+                </Field>
+              )}
+
+              <button style={{ ...btnPrimary, width: '100%', marginTop: 8 }} onClick={runPrediction} disabled={predicting || !activeModel}>
+                {predicting ? 'Predicting…' : 'Predict yield'}
+              </button>
+              {!activeModel && <div style={{ fontSize: 12, color: COLORS.rust, marginTop: 6 }}>No trained model for this combination.</div>}
+              {predictError && <div style={{ fontSize: 12, color: COLORS.rust, marginTop: 6 }}>{predictError}</div>}
+            </div>
+          )}
+
+          <div>
+            {result && (
+              <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
+                <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 4 }}>{region} · {crop} · {yieldType.replace('_', ' ')}</div>
+                <div style={{ fontFamily: FONT_HEAD, fontSize: 40, fontWeight: 500, color: COLORS.tealDeep }}>
+                  {result.prediction} <span style={{ fontSize: 16, color: COLORS.inkSoft }}>{result.unit}</span>
+                </div>
+                <div style={{ fontSize: 13, color: COLORS.inkSoft, marginTop: 4 }}>
+                  Likely range: {result.range_low} – {result.range_high} {result.unit}
+                </div>
+                {result.note && <div style={{ fontSize: 12, color: COLORS.goldDeep, marginTop: 10 }}>{result.note}</div>}
+              </div>
+            )}
+
+            <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18 }}>
+              <div style={{ fontSize: 13, color: COLORS.inkSoft, marginBottom: 2 }}>
+                County overview — {crop}, {yieldType.replace('_', ' ')} (historical average)
+              </div>
+              <div style={{ fontSize: 11, color: COLORS.inkSoft, marginBottom: 12 }}>
+                Simplified representative layout, grouped by climate division — not exact county boundaries.
+              </div>
+              <svg width="100%" viewBox={`0 0 ${4 * (tile + gap)} ${7 * (tile + gap) - gap + 10}`}>
+                {Object.entries(COUNTY_LAYOUT).map(([division, group]) =>
+                  group.counties.map((c) => {
+                    const x = c.x * (tile + gap);
+                    const y = c.y * (tile + gap);
+                    const fill = counties ? yieldColor(c.name) : group.color;
+                    const isHovered = hovered === c.name;
+                    return (
+                      <g
+                        key={c.name}
+                        onMouseEnter={() => setHovered(c.name)}
+                        onMouseLeave={() => setHovered(null)}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <rect
+                          x={x} y={y} width={tile} height={tile} rx={8}
+                          fill={fill}
+                          stroke={isHovered ? COLORS.ink : 'transparent'}
+                          strokeWidth={isHovered ? 2 : 0}
+                          opacity={counties ? 0.92 : 0.5}
+                        />
+                        <text x={x + tile / 2} y={y + tile / 2} textAnchor="middle" dominantBaseline="central"
+                              style={{ fontSize: 10, fill: '#fff', fontFamily: FONT_BODY, fontWeight: 500 }}>
+                          {c.name}
+                        </text>
+                      </g>
+                    );
+                  })
+                )}
+              </svg>
+              {hovered && (
+                <div style={{ marginTop: 10, fontSize: 13, background: COLORS.cream, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 10 }}>
+                  <strong>{hovered}</strong>
+                  {counties?.[hovered] ? (
+                    <div style={{ color: COLORS.inkSoft, marginTop: 2 }}>
+                      Average {yieldType.replace('_', ' ')}: {counties[hovered][`${yieldType}_mean`] ?? 'n/a'} {crop === 'Cotton' ? 'lb/acre' : 'bu/acre'}
+                      {counties[hovered].latest_year && <> · latest recorded: {counties[hovered].latest_overall_yield} in {counties[hovered].latest_year}</>}
+                    </div>
+                  ) : (
+                    <div style={{ color: COLORS.inkSoft, marginTop: 2 }}>Connect to load county data.</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<TexasYieldExplorer />);
+</script>
+</body>
+</html>
