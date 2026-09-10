@@ -1,25 +1,33 @@
 """
-Texas Yield Explorer — Flask backend (Render-ready).
+Texas Yield Explorer -- Flask backend (Render-ready).
 
-This does NOT train anything. It loads the model files produced by
+This does NOT train anything. It loads model files produced by
 TexasYieldExplorer_TrainAndExport.ipynb (run once in Colab) and serves
 predictions from them.
 
-Small files (json, requirements.txt, this script) live directly in the GitHub
-repo. The two large model files (models_Corn.joblib, models_Cotton.joblib) are
-NOT in the repo -- GitHub blocks/discourages files that large in normal commits.
-Instead they are attached to a GitHub Release, and this script downloads them
-automatically the first time it starts up, if they are not already present.
+IMPORTANT: models are loaded LAZILY, one at a time, only when actually
+requested -- not all at once at startup. Loading every region/window
+combination into memory simultaneously exceeded free-tier hosting's 512MB
+RAM limit. A small cache keeps a handful of recently-used models in memory
+and evicts the oldest when it gets full, so memory use stays bounded no
+matter how many different combinations get requested over time.
 
-Expected small files in the same folder as this script:
-  counties_Corn.json, counties_Cotton.json
+Expected files in the same folder as this script:
   meta_Corn.json, meta_Cotton.json
+  counties_Corn.json, counties_Cotton.json
   climate_trend_Corn.json, climate_trend_Cotton.json
+
+Model files (model_<crop>_<region>_<window>_<yieldtype>.joblib) are NOT
+expected to be present locally -- they are downloaded on demand from a
+GitHub Release the first time each one is actually needed.
 """
 
 import os
+import re
 import json
 import urllib.request
+from collections import OrderedDict
+
 import joblib
 import numpy as np
 from flask import Flask, request, jsonify
@@ -28,68 +36,91 @@ from flask_cors import CORS
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CROPS = ['Corn', 'Cotton']
 
-# Direct-download URLs for the large model files, from the GitHub Release.
-# Update these if you ever publish a new release with a different tag.
-MODEL_DOWNLOAD_URLS = {
-    'Corn': 'https://github.com/dapoajike-cyber/Prediction-App/releases/download/V1/models_Corn.joblib',
-    'Cotton': 'https://github.com/dapoajike-cyber/Prediction-App/releases/download/V1/models_Cotton.joblib',
-}
+# Base URL where all model_*.joblib files were uploaded as GitHub Release assets.
+MODEL_BASE_URL = 'https://github.com/dapoajike-cyber/Prediction-App/releases/download/V1'
+
+# How many models to keep cached in memory at once. Each is a handful of MB,
+# so this stays well within free-tier memory limits.
+MAX_CACHED_MODELS = 3
 
 app = Flask(__name__)
-CORS(app)  # allow the web app (hosted separately or elsewhere) to call this API
+CORS(app)
 
-
-def ensure_model_file(crop):
-    """Downloads the model file for this crop if it isn't already on disk."""
-    models_path = os.path.join(BASE_DIR, f'models_{crop}.joblib')
-    if os.path.exists(models_path):
-        return models_path
-    url = MODEL_DOWNLOAD_URLS.get(crop)
-    if not url:
-        return None
-    print(f'Downloading {crop} model from {url} ...')
-    try:
-        urllib.request.urlretrieve(url, models_path)
-        size_mb = os.path.getsize(models_path) / (1024 * 1024)
-        print(f'  Downloaded models_{crop}.joblib ({size_mb:.1f} MB)')
-        return models_path
-    except Exception as e:
-        print(f'  ERROR downloading {crop} model: {e}')
-        return None
-
-
-# ---- Load everything once, at startup ----
-MODELS = {}          # crop -> {key: {'model', 'scaler', 'feat_cols', 'n'}}
 META = {}            # crop -> list of dicts (from meta_{crop}.json)
 COUNTIES = {}        # crop -> list of dicts
 CLIMATE_TREND = {}   # crop -> list of yearly records
+MODEL_CACHE = OrderedDict()  # filename -> loaded model dict (LRU)
 
+
+def slugify(text):
+    return re.sub(r'[^A-Za-z0-9]+', '_', text).strip('_')
+
+
+# ---- Load only the small metadata/lookup files at startup ----
 for crop in CROPS:
-    models_path = ensure_model_file(crop)
     meta_path = os.path.join(BASE_DIR, f'meta_{crop}.json')
     counties_path = os.path.join(BASE_DIR, f'counties_{crop}.json')
     trend_path = os.path.join(BASE_DIR, f'climate_trend_{crop}.json')
 
-    if not models_path or not os.path.exists(models_path):
-        print(f'WARNING: model file for {crop} could not be found or downloaded — '
-              f'{crop} will be unavailable.')
+    if not os.path.exists(meta_path):
+        print(f'WARNING: {meta_path} not found -- {crop} will be unavailable.')
         continue
 
-    MODELS[crop] = joblib.load(models_path)
     with open(meta_path) as f:
         META[crop] = json.load(f)
     with open(counties_path) as f:
         COUNTIES[crop] = json.load(f)
     with open(trend_path) as f:
         CLIMATE_TREND[crop] = json.load(f)
-    print(f'Loaded {crop}: {len(MODELS[crop])} models, {len(COUNTIES[crop])} counties')
+    print(f'Loaded metadata for {crop}: {len(META[crop])} model combinations available, '
+          f'{len(COUNTIES[crop])} counties')
+
+
+def find_meta_entry(crop, region, window_months_count, yield_type):
+    for entry in META.get(crop, []):
+        if (entry['region'] == region and entry['window_months_count'] == window_months_count
+                and entry['yield_type'] == yield_type):
+            return entry
+    return None
 
 
 def get_model_entry(crop, region, window_months_count, yield_type):
-    if crop not in MODELS:
+    """Loads a model on demand, downloading it first if necessary. Caches a
+    small number of recently-used models in memory; evicts the oldest when full."""
+    meta_entry = find_meta_entry(crop, region, window_months_count, yield_type)
+    if meta_entry is None:
         return None
-    key = f'{region}|{window_months_count}|{yield_type}'
-    return MODELS[crop].get(key)
+
+    filename = meta_entry.get('model_filename')
+    if not filename:
+        return None
+
+    if filename in MODEL_CACHE:
+        MODEL_CACHE.move_to_end(filename)  # mark as recently used
+        return MODEL_CACHE[filename]
+
+    filepath = os.path.join(BASE_DIR, filename)
+    if not os.path.exists(filepath):
+        url = f'{MODEL_BASE_URL}/{filename}'
+        print(f'Downloading {filename} from {url} ...')
+        try:
+            urllib.request.urlretrieve(url, filepath)
+        except Exception as e:
+            print(f'  ERROR downloading {filename}: {e}')
+            return None
+
+    entry = joblib.load(filepath)
+
+    # Evict oldest cached model(s) if we are at capacity, and remove the file
+    # from disk too so it does not accumulate across many different requests.
+    while len(MODEL_CACHE) >= MAX_CACHED_MODELS:
+        old_filename, _ = MODEL_CACHE.popitem(last=False)
+        old_path = os.path.join(BASE_DIR, old_filename)
+        if os.path.exists(old_path):
+            os.remove(old_path)
+
+    MODEL_CACHE[filename] = entry
+    return entry
 
 
 @app.route('/meta', methods=['GET'])
@@ -203,10 +234,13 @@ def counties():
 
 @app.route('/', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'crops_loaded': list(MODELS.keys())})
+    return jsonify({
+        'status': 'ok',
+        'crops_loaded': list(META.keys()),
+        'models_currently_cached': list(MODEL_CACHE.keys()),
+    })
 
 
 if __name__ == '__main__':
-    # Render sets the PORT environment variable; default to 5000 for local testing.
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
