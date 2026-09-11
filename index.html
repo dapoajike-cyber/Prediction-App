@@ -107,7 +107,7 @@ const btnGhost = {
 };
 
 function TexasYieldExplorer() {
-  const [backendUrl, setBackendUrl] = React.useState('');
+  const [backendUrl, setBackendUrl] = React.useState('https://prediction-app-23c6.onrender.com');
   const [connStatus, setConnStatus] = React.useState('disconnected');
   const [connError, setConnError] = React.useState('');
   const [meta, setMeta] = React.useState(null);
@@ -192,6 +192,13 @@ function TexasYieldExplorer() {
       setCounties(null);
     }
   }
+
+  // Auto-connect once on page load, since the backend URL is pre-filled and
+  // does not change -- saves the user from having to click Connect manually.
+  React.useEffect(() => {
+    connect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   React.useEffect(() => {
     if (connStatus === 'connected') loadCounties();
