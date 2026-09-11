@@ -203,7 +203,10 @@ def predict():
 
 @app.route('/predict_year', methods=['POST'])
 def predict_year():
-    """Predict yield for a future year by extrapolating the historical climate trend."""
+    """Predict yield for a given year. If real climate data exists for that
+    year (i.e. it falls within the historical record), use the actual
+    recorded values. Only extrapolate the historical trend for years beyond
+    the historical record, where no real data exists yet."""
     data = request.get_json(force=True)
     crop = data.get('crop')
     region = data.get('region')
@@ -220,24 +223,38 @@ def predict_year():
         return jsonify({'detail': f'No climate trend data for {crop}.'}), 404
 
     years = np.array([r['Year'] for r in trend])
-    est_climate = {}
-    for col in entry['feat_cols']:
-        if col not in trend[0]:
-            continue
-        vals = np.array([r[col] for r in trend])
-        coeffs = np.polyfit(years, vals, deg=1)
-        est_climate[col] = float(np.polyval(coeffs, year))
+    max_known_year = int(years.max())
+
+    actual_row = next((r for r in trend if r['Year'] == year), None)
+
+    if actual_row is not None:
+        # Real recorded climate exists for this year -- use it directly,
+        # no extrapolation, no "estimated" caveat needed.
+        climate_for_year = {k: v for k, v in actual_row.items() if k != 'Year'}
+        note = f'Using actual recorded climate data for {year}.'
+    else:
+        # No recorded data for this year (it's beyond the historical record) --
+        # estimate it by extrapolating the trend, and say so plainly.
+        climate_for_year = {}
+        for col in entry['feat_cols']:
+            if col not in trend[0]:
+                continue
+            vals = np.array([r[col] for r in trend])
+            coeffs = np.polyfit(years, vals, deg=1)
+            climate_for_year[col] = float(np.polyval(coeffs, year))
+        note = (f'{year} is beyond the historical record (data available through {max_known_year}). '
+                f'Climate is estimated by extrapolating the historical trend, not measured data. '
+                f'Treat as approximate.')
 
     fake_request = {
         'crop': crop, 'region': region, 'window_months_count': window_months_count,
-        'yield_type': yield_type, 'climate': est_climate, 'co2_ppm': est_climate.get('CO2_ppm'),
+        'yield_type': yield_type, 'climate': climate_for_year, 'co2_ppm': climate_for_year.get('CO2_ppm'),
     }
     with app.test_request_context(json=fake_request):
         result_response = predict()
     result = result_response[0].get_json() if isinstance(result_response, tuple) else result_response.get_json()
-    result['note'] = (f'Climate for {year} is estimated by extrapolating the historical trend, '
-                       'not measured data. Treat as approximate.')
-    result['estimated_climate'] = {k: round(v, 2) for k, v in est_climate.items()}
+    result['note'] = note
+    result['estimated_climate'] = {k: round(v, 2) for k, v in climate_for_year.items()}
     return jsonify(result)
 
 
