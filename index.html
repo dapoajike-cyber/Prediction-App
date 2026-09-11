@@ -19,18 +19,19 @@ const FONT_HEAD = "'Fraunces', Georgia, serif";
 const FONT_BODY = "'IBM Plex Sans', system-ui, sans-serif";
 
 const COLORS = {
-  bg: '#EDEFE6',
-  panel: '#F7F8F2',
-  ink: '#2B2420',
-  inkSoft: '#5B5245',
-  border: '#D3D3C2',
+  bg: '#F3EEF7',
+  panel: '#FFFFFF',
+  ink: '#2B1B3D',
+  inkSoft: '#5C4A70',
+  border: '#DCCFE8',
   gold: '#B8862F',
   goldDeep: '#8A6423',
   teal: '#3C6E71',
-  tealDeep: '#284A4C',
+  tealDeep: '#582C83',
   olive: '#5B7B3B',
   rust: '#A63D2F',
-  cream: '#FBFAF5',
+  cream: '#FBF9FD',
+  pvamuGold: '#FFCC33',
 };
 
 const COUNTY_LAYOUT = {
@@ -289,7 +290,8 @@ function TexasYieldExplorer() {
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500&display=swap" />
 
       <div style={{ maxWidth: 960, margin: '0 auto' }}>
-        <h1 style={{ fontFamily: FONT_HEAD, fontSize: 30, fontWeight: 500, margin: '0 0 4px' }}>
+        <div style={{ width: 64, height: 4, background: COLORS.pvamuGold, borderRadius: 2, marginBottom: 14 }} />
+        <h1 style={{ fontFamily: FONT_HEAD, fontSize: 30, fontWeight: 500, margin: '0 0 4px', color: COLORS.tealDeep }}>
           Texas yield explorer
         </h1>
         <p style={{ fontSize: 14, color: COLORS.inkSoft, margin: '0 0 24px', maxWidth: 560 }}>
