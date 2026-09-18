@@ -1,0 +1,796 @@
+import React, { useState, useMemo } from 'react';
+const FONT_HEAD = "'Fraunces', Georgia, serif";
+const FONT_BODY = "'IBM Plex Sans', system-ui, sans-serif";
+
+const COLORS = {
+  bg: '#F3EEF7',
+  panel: '#FFFFFF',
+  ink: '#2B1B3D',
+  inkSoft: '#5C4A70',
+  border: '#DCCFE8',
+  gold: '#B8862F',
+  goldDeep: '#8A6423',
+  teal: '#3C6E71',
+  tealDeep: '#582C83',
+  olive: '#5B7B3B',
+  rust: '#A63D2F',
+  cream: '#FBF9FD',
+  pvamuGold: '#FFCC33',
+};
+
+// Real Texas county boundaries, sourced from us-atlas (topojson.github.io/us-atlas),
+// which is built directly from the U.S. Census Bureau's cartographic boundary files
+// -- the same official lineage as the TIGER shapefiles used for the original PRISM
+// zonal-statistics work, just the simplified version Census recommends for web
+// display rather than precise area calculation. Schema is well documented:
+// each county has county.id (5-digit FIPS) and county.properties.name.
+const US_ATLAS_TOPOJSON_URL = 'https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json';
+const TEXAS_STATE_FIPS_PREFIX = '48';
+
+const FALLBACK_GRID = {
+  'High Plains': [
+    { name: 'Deaf Smith', x: 0, y: 0 }, { name: 'Parmer', x: 1, y: 0 },
+    { name: 'Castro', x: 2, y: 0 }, { name: 'Swisher', x: 3, y: 0 },
+    { name: 'Bailey', x: 0, y: 1 }, { name: 'Lamb', x: 1, y: 1 },
+    { name: 'Hale', x: 2, y: 1 }, { name: 'Floyd', x: 3, y: 1 },
+    { name: 'Cochran', x: 0, y: 2 }, { name: 'Hockley', x: 1, y: 2 },
+    { name: 'Lubbock', x: 2, y: 2 }, { name: 'Crosby', x: 3, y: 2 },
+  ],
+  'North Central': [
+    { name: 'Wilbarger', x: 0.5, y: 3.2 }, { name: 'Baylor', x: 1.5, y: 3.2 },
+    { name: 'Knox', x: 2.5, y: 3.2 }, { name: 'Haskell', x: 0.5, y: 4.1 },
+    { name: 'Foard', x: 1.5, y: 4.1 }, { name: 'Hardeman', x: 2.5, y: 4.1 },
+  ],
+  'South Central': [
+    { name: 'Wharton', x: 0.5, y: 5.4 }, { name: 'Victoria', x: 1.5, y: 5.4 },
+    { name: 'Nueces', x: 0.5, y: 6.3 }, { name: 'San Patricio', x: 1.5, y: 6.3 },
+    { name: 'Bee', x: 2.5, y: 5.4 }, { name: 'Refugio', x: 2.5, y: 6.3 },
+  ],
+};
+
+function makeProjector(bounds, width, height, padding) {
+  const { minLon, maxLon, minLat, maxLat } = bounds;
+  const midLat = (minLat + maxLat) / 2;
+  const lonScale = Math.cos((midLat * Math.PI) / 180);
+  const spanX = (maxLon - minLon) * lonScale;
+  const spanY = maxLat - minLat;
+  const usableW = width - padding * 2;
+  const usableH = height - padding * 2;
+  const scale = Math.min(usableW / spanX, usableH / spanY);
+  const offsetX = padding + (usableW - spanX * scale) / 2;
+  const offsetY = padding + (usableH - spanY * scale) / 2;
+  return (lon, lat) => {
+    const x = offsetX + (lon - minLon) * lonScale * scale;
+    const y = offsetY + (maxLat - lat) * scale;
+    return [x, y];
+  };
+}
+
+function ringToPath(ring, project) {
+  return ring.map(([lon, lat], i) => {
+    const [x, y] = project(lon, lat);
+    return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ') + ' Z';
+}
+
+function geometryToPath(geometry, project) {
+  if (!geometry) return '';
+  if (geometry.type === 'Polygon') {
+    return geometry.coordinates.map((ring) => ringToPath(ring, project)).join(' ');
+  }
+  if (geometry.type === 'MultiPolygon') {
+    return geometry.coordinates.map((poly) => poly.map((ring) => ringToPath(ring, project)).join(' ')).join(' ');
+  }
+  return '';
+}
+
+function Field({ label, children }) {
+  return (
+    <label style={{ display: 'block', marginBottom: 14 }}>
+      <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 5, fontFamily: FONT_BODY }}>
+        {label}
+      </div>
+      {children}
+    </label>
+  );
+}
+
+const selectStyle = {
+  width: '100%',
+  padding: '9px 10px',
+  fontSize: 14,
+  fontFamily: FONT_BODY,
+  color: COLORS.ink,
+  background: COLORS.cream,
+  border: `1px solid ${COLORS.border}`,
+  borderRadius: 6,
+};
+
+const inputStyle = { ...selectStyle };
+
+const btnPrimary = {
+  padding: '11px 18px',
+  fontSize: 14,
+  fontFamily: FONT_BODY,
+  fontWeight: 500,
+  color: '#fff',
+  background: COLORS.tealDeep,
+  border: 'none',
+  borderRadius: 6,
+  cursor: 'pointer',
+};
+
+const btnGhost = {
+  ...btnPrimary,
+  background: 'transparent',
+  color: COLORS.tealDeep,
+  border: `1px solid ${COLORS.tealDeep}`,
+};
+
+export default function TexasYieldExplorer() {
+  const [backendUrl, setBackendUrl] = useState('https://prediction-app-23c6.onrender.com');
+  const [connStatus, setConnStatus] = useState('disconnected');
+  const [connError, setConnError] = useState('');
+  const [meta, setMeta] = useState(null);
+
+  const [crop, setCrop] = useState('Cotton');
+  const [region, setRegion] = useState('All Texas');
+  const [windowCount, setWindowCount] = useState(null);
+  const [yieldType, setYieldType] = useState('Overall_Yield');
+  const [mode, setMode] = useState('manual');
+  const [climateValues, setClimateValues] = useState({});
+  const [targetYear, setTargetYear] = useState(2029);
+
+  const [result, setResult] = useState(null);
+  const [predicting, setPredicting] = useState(false);
+  const [predictError, setPredictError] = useState('');
+
+  const [counties, setCounties] = useState(null);
+  const [hovered, setHovered] = useState(null);
+  const [selectedCounty, setSelectedCounty] = useState(null);
+  const [countyDetail, setCountyDetail] = useState(null);
+  const [countyDetailLoading, setCountyDetailLoading] = useState(false);
+  const [countyDetailError, setCountyDetailError] = useState('');
+  const [geoFeatures, setGeoFeatures] = useState(null); // real county shapes, once loaded
+  const [geoError, setGeoError] = useState(false);
+  const [geoLoading, setGeoLoading] = useState(true);
+
+  React.useEffect(() => {
+    fetch(US_ATLAS_TOPOJSON_URL)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((topology) => {
+        if (typeof topojson === 'undefined' || !topojson.feature) {
+          throw new Error('topojson-client did not load');
+        }
+        const geojson = topojson.feature(topology, topology.objects.counties);
+        const texasFeatures = geojson.features
+          .filter((f) => String(f.id).padStart(5, '0').startsWith(TEXAS_STATE_FIPS_PREFIX))
+          .map((f) => ({ ...f, __name: f.properties && f.properties.name }))
+          .filter((f) => f.__name && f.geometry);
+        if (!texasFeatures.length) throw new Error('No Texas counties found in the fetched topology');
+        setGeoFeatures(texasFeatures);
+        setGeoLoading(false);
+      })
+      .catch((err) => {
+        console.warn('Could not load real county boundaries, falling back to grid layout:', err);
+        setGeoError(true);
+        setGeoLoading(false);
+      });
+  }, []);
+
+  // Pre-compute every county's SVG path ONCE, when the shapes first load --
+  // not on every hover. Recomputing 254 county paths on every mouse movement
+  // was the cause of the flickering.
+  const projectedCounties = useMemo(() => {
+    if (!geoFeatures) return null;
+    const lons = [];
+    const lats = [];
+    geoFeatures.forEach((f) => {
+      const coordsList = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+      coordsList.forEach((poly) => poly.forEach((ring) => ring.forEach(([lon, lat]) => {
+        lons.push(lon); lats.push(lat);
+      })));
+    });
+    const bounds = { minLon: Math.min(...lons), maxLon: Math.max(...lons), minLat: Math.min(...lats), maxLat: Math.max(...lats) };
+    const W = 500, H = 520;
+    const project = makeProjector(bounds, W, H, 10);
+    return {
+      width: W,
+      height: H,
+      shapes: geoFeatures.map((f, idx) => ({
+        id: f.id || `${f.__name}-${idx}`,
+        name: f.__name,
+        d: geometryToPath(f.geometry, project),
+      })),
+    };
+  }, [geoFeatures]);
+
+  const modelsForCrop = useMemo(() => {
+    if (!meta) return [];
+    return meta.available_models.filter((m) => m.crop === crop);
+  }, [meta, crop]);
+
+  const regionsAvailable = useMemo(
+    () => [...new Set(modelsForCrop.map((m) => m.region))],
+    [modelsForCrop]
+  );
+
+  const windowsAvailable = useMemo(
+    () =>
+      [...new Set(modelsForCrop.filter((m) => m.region === region).map((m) => m.window_months_count))].sort(
+        (a, b) => a - b
+      ),
+    [modelsForCrop, region]
+  );
+
+  const activeModel = useMemo(
+    () =>
+      modelsForCrop.find(
+        (m) => m.region === region && m.window_months_count === windowCount && m.yield_type === yieldType
+      ),
+    [modelsForCrop, region, windowCount, yieldType]
+  );
+
+  async function connect() {
+    if (!backendUrl.trim()) {
+      setConnError('Enter the backend URL first.');
+      return;
+    }
+    setConnStatus('connecting');
+    setConnError('');
+    try {
+      const res = await fetch(`${backendUrl.replace(/\/$/, '')}/meta`);
+      if (!res.ok) throw new Error(`Server responded with ${res.status}`);
+      const data = await res.json();
+      setMeta(data);
+      setConnStatus('connected');
+      const first = data.available_models.find((m) => m.crop === crop);
+      if (first) {
+        setRegion(first.region);
+        setWindowCount(first.window_months_count);
+      }
+    } catch (e) {
+      setConnStatus('error');
+      setConnError('Could not reach the backend. Check the URL and make sure the service is running (it may take up to a minute to wake up if it has been idle).');
+    }
+  }
+
+  async function loadCounties() {
+    if (connStatus !== 'connected') return;
+    try {
+      const res = await fetch(`${backendUrl.replace(/\/$/, '')}/counties?crop=${crop}`);
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      const lookup = {};
+      data.forEach((row) => {
+        lookup[row.County] = row;
+      });
+      setCounties(lookup);
+    } catch {
+      setCounties(null);
+    }
+  }
+
+  // Auto-connect once on page load, since the backend URL is pre-filled and
+  // does not change -- saves the user from having to click Connect manually.
+  React.useEffect(() => {
+    connect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  React.useEffect(() => {
+    if (connStatus === 'connected') loadCounties();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connStatus, crop]);
+
+  async function runPrediction() {
+    if (!activeModel) {
+      setPredictError('No trained model for this combination.');
+      return;
+    }
+    setPredicting(true);
+    setPredictError('');
+    setResult(null);
+    try {
+      const base = backendUrl.replace(/\/$/, '');
+      let res;
+      if (mode === 'year') {
+        res = await fetch(`${base}/predict_year`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            crop, region, window_months_count: windowCount, yield_type: yieldType, year: Number(targetYear),
+          }),
+        });
+      } else {
+        const missing = activeModel.feature_columns.filter(
+          (c) => c !== 'CO2_ppm' && (climateValues[c] === undefined || climateValues[c] === '')
+        );
+        if (missing.length) {
+          setPredictError(`Enter a value for: ${missing.join(', ')}`);
+          setPredicting(false);
+          return;
+        }
+        const climate = {};
+        activeModel.feature_columns.forEach((c) => {
+          if (c !== 'CO2_ppm') climate[c] = Number(climateValues[c]);
+        });
+        res = await fetch(`${base}/predict`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ crop, region, window_months_count: windowCount, yield_type: yieldType, climate }),
+        });
+      }
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.detail || `Server responded with ${res.status}`);
+      }
+      const data = await res.json();
+      setResult(data);
+    } catch (e) {
+      setPredictError(e.message || 'Prediction failed.');
+    } finally {
+      setPredicting(false);
+    }
+  }
+
+  function hexToRgb(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+
+  function mixColor(c1, c2, t) {
+    const a = hexToRgb(c1), b = hexToRgb(c2);
+    const r = Math.round(a.r + (b.r - a.r) * t);
+    const g = Math.round(a.g + (b.g - a.g) * t);
+    const bl = Math.round(a.b + (b.b - a.b) * t);
+    return `rgb(${r},${g},${bl})`;
+  }
+
+  function yieldColor(county) {
+    const row = getCountyRow(county);
+    if (!row) return COLORS.border;
+    const v = row[`${yieldType}_mean`];
+    if (v == null) return COLORS.border;
+    const max = crop === 'Cotton' ? 900 : 160;
+    const t = Math.max(0, Math.min(1, v / max));
+    const stops = [COLORS.rust, COLORS.gold, COLORS.olive];
+    const idx = t < 0.5 ? 0 : 1;
+    const localT = t < 0.5 ? t / 0.5 : (t - 0.5) / 0.5;
+    return mixColor(stops[idx], stops[idx + 1], localT);
+  }
+
+  // Colors counties by the CURRENT SCENARIO's estimated yield instead of the
+  // historical average -- used once a prediction has been made. This is the
+  // same approximation as countyPredictionEstimate (regional prediction,
+  // scaled by each county's historical relationship to the regional average),
+  // not an independently trained per-county model.
+  function scenarioColor(county) {
+    const est = countyPredictionEstimate(county);
+    if (est == null) return COLORS.border;
+    const max = crop === 'Cotton' ? 900 : 160;
+    const t = Math.max(0, Math.min(1, est / max));
+    const stops = [COLORS.rust, COLORS.gold, COLORS.olive];
+    const idx = t < 0.5 ? 0 : 1;
+    const localT = t < 0.5 ? t / 0.5 : (t - 0.5) / 0.5;
+    return mixColor(stops[idx], stops[idx + 1], localT);
+  }
+
+  function normalizeCountyName(name) {
+    return String(name).toLowerCase().replace(/[\s.'-]/g, '');
+  }
+
+  // Names from the Census-derived map (e.g. "DeWitt") don't always match the
+  // exact spelling/spacing in the training data (e.g. "De Witt") -- this looks
+  // up by exact name first, then falls back to a normalized match so those
+  // counties still show their real data instead of "no data".
+  const normalizedCountyIndex = useMemo(() => {
+    if (!counties) return {};
+    const index = {};
+    Object.entries(counties).forEach(([name, row]) => {
+      index[normalizeCountyName(name)] = row;
+    });
+    return index;
+  }, [counties]);
+
+  function getCountyRow(name) {
+    if (!counties || !name) return null;
+    return counties[name] || normalizedCountyIndex[normalizeCountyName(name)] || null;
+  }
+
+  async function handleCountyClick(name) {
+    setSelectedCounty(name);
+    setCountyDetail(null);
+    setCountyDetailError('');
+    setCountyDetailLoading(true);
+    try {
+      const base = backendUrl.replace(/\/$/, '');
+      const res = await fetch(`${base}/county_detail?crop=${encodeURIComponent(crop)}&county=${encodeURIComponent(name)}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `No detailed data available for ${name}.`);
+      }
+      const data = await res.json();
+      setCountyDetail(data);
+    } catch (e) {
+      setCountyDetailError(e.message || 'Could not load county detail.');
+    } finally {
+      setCountyDetailLoading(false);
+    }
+  }
+
+  function countyPredictionEstimate(county) {
+    if (!result || !counties) return null;
+    const row = getCountyRow(county);
+    if (!row) return null;
+    const countyMean = row[`${yieldType}_mean`];
+    if (countyMean == null) return null;
+    const allMeans = Object.values(counties)
+      .map((r) => r[`${yieldType}_mean`])
+      .filter((v) => v != null);
+    if (!allMeans.length) return null;
+    const regionalMean = allMeans.reduce((a, b) => a + b, 0) / allMeans.length;
+    if (!regionalMean) return null;
+    return result.prediction * (countyMean / regionalMean);
+  }
+
+  const tile = 78, gap = 6;
+
+  return (
+    <div style={{ background: COLORS.bg, minHeight: '100%', fontFamily: FONT_BODY, color: COLORS.ink, padding: '28px 20px' }}>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500&display=swap" />
+
+      <div style={{ maxWidth: 960, margin: '0 auto' }}>
+        <div style={{ width: 64, height: 4, background: COLORS.pvamuGold, borderRadius: 2, marginBottom: 14 }} />
+        <h1 style={{ fontFamily: FONT_HEAD, fontSize: 30, fontWeight: 500, margin: '0 0 4px', color: COLORS.tealDeep }}>
+          Texas yield explorer
+        </h1>
+        <p style={{ fontSize: 14, color: COLORS.inkSoft, margin: '0 0 24px', maxWidth: 560 }}>
+          Predict corn and cotton yield from climate inputs, using the trained random forest models. Connect to the backend below to run real predictions.
+        </p>
+
+        <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18, marginBottom: 20 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 280px' }}>
+              <Field label="Backend URL">
+                <input
+                  style={inputStyle}
+                  placeholder="https://your-backend.onrender.com"
+                  value={backendUrl}
+                  onChange={(e) => setBackendUrl(e.target.value)}
+                />
+              </Field>
+            </div>
+            <button style={btnPrimary} onClick={connect}>
+              {connStatus === 'connecting' ? 'Connecting…' : 'Connect'}
+            </button>
+          </div>
+          <div style={{ marginTop: 8, fontSize: 13 }}>
+            {connStatus === 'connected' && (
+              <span style={{ color: COLORS.olive }}>● Connected — {meta?.available_models?.length ?? 0} models available</span>
+            )}
+            {connStatus === 'error' && <span style={{ color: COLORS.rust }}>● {connError}</span>}
+            {connStatus === 'disconnected' && <span style={{ color: COLORS.inkSoft }}>Not connected yet</span>}
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: connStatus === 'connected' ? '280px 1fr' : '1fr', gap: 20 }}>
+          {connStatus === 'connected' && (
+            <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18, height: 'fit-content' }}>
+              <Field label="Crop">
+                <select style={selectStyle} value={crop} onChange={(e) => {
+                  const newCrop = e.target.value;
+                  setCrop(newCrop); setResult(null);
+                  const models = meta.available_models.filter((m) => m.crop === newCrop);
+                  const first = models[0];
+                  if (first) { setRegion(first.region); setWindowCount(first.window_months_count); }
+                }}>
+                  <option value="Cotton">Cotton</option>
+                  <option value="Corn">Corn</option>
+                </select>
+              </Field>
+              <Field label="Region">
+                <select style={selectStyle} value={region} onChange={(e) => {
+                  const newRegion = e.target.value;
+                  setRegion(newRegion); setResult(null);
+                  const windowsForNewRegion = modelsForCrop
+                    .filter((m) => m.region === newRegion)
+                    .map((m) => m.window_months_count)
+                    .sort((a, b) => a - b);
+                  if (windowsForNewRegion.length && !windowsForNewRegion.includes(windowCount)) {
+                    setWindowCount(windowsForNewRegion[0]);
+                  }
+                }}>
+                  {regionsAvailable.map((r) => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </Field>
+              <Field label="Growing-season window">
+                <select style={selectStyle} value={windowCount ?? ''} onChange={(e) => { setWindowCount(Number(e.target.value)); setResult(null); }}>
+                  {windowsAvailable.map((w) => {
+                    const m = modelsForCrop.find((mm) => mm.region === region && mm.window_months_count === w);
+                    return <option key={w} value={w}>{m?.window_label ?? `${w} months`}</option>;
+                  })}
+                </select>
+              </Field>
+              <Field label="Yield type">
+                <select style={selectStyle} value={yieldType} onChange={(e) => { setYieldType(e.target.value); setResult(null); }}>
+                  <option value="Overall_Yield">Overall</option>
+                  <option value="Irrigated_Yield">Irrigated</option>
+                  <option value="NonIrrigated_Yield">Non-irrigated</option>
+                </select>
+              </Field>
+
+              <div style={{ display: 'flex', gap: 6, margin: '14px 0' }}>
+                <button style={mode === 'manual' ? btnPrimary : btnGhost} onClick={() => setMode('manual')}>Enter climate</button>
+                <button style={mode === 'year' ? btnPrimary : btnGhost} onClick={() => setMode('year')}>Pick a year</button>
+              </div>
+
+              {mode === 'manual' && activeModel && (
+                <div style={{ maxHeight: 260, overflowY: 'auto', paddingRight: 4 }}>
+                  {activeModel.feature_columns.filter((c) => c !== 'CO2_ppm').map((col) => (
+                    <Field key={col} label={col.replace('_', ' — ')}>
+                      <input
+                        style={inputStyle}
+                        type="number"
+                        value={climateValues[col] ?? ''}
+                        onChange={(e) => setClimateValues((v) => ({ ...v, [col]: e.target.value }))}
+                      />
+                    </Field>
+                  ))}
+                </div>
+              )}
+
+              {mode === 'year' && (
+                <Field label="Year to predict">
+                  <input style={inputStyle} type="number" value={targetYear} onChange={(e) => setTargetYear(e.target.value)} />
+                </Field>
+              )}
+
+              <button style={{ ...btnPrimary, width: '100%', marginTop: 8 }} onClick={runPrediction} disabled={predicting || !activeModel}>
+                {predicting ? 'Predicting…' : 'Predict yield'}
+              </button>
+              {!activeModel && <div style={{ fontSize: 12, color: COLORS.rust, marginTop: 6 }}>No trained model for this combination.</div>}
+              {predictError && <div style={{ fontSize: 12, color: COLORS.rust, marginTop: 6 }}>{predictError}</div>}
+            </div>
+          )}
+
+          <div>
+            {result && (
+              <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
+                <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 4 }}>{region} · {crop} · {yieldType.replace('_', ' ')}</div>
+                <div style={{ fontFamily: FONT_HEAD, fontSize: 40, fontWeight: 500, color: COLORS.tealDeep }}>
+                  {result.prediction} <span style={{ fontSize: 16, color: COLORS.inkSoft }}>{result.unit}</span>
+                </div>
+                <div style={{ fontSize: 13, color: COLORS.inkSoft, marginTop: 4 }}>
+                  Likely range: {result.range_low} – {result.range_high} {result.unit}
+                </div>
+                {result.note && <div style={{ fontSize: 12, color: COLORS.goldDeep, marginTop: 10 }}>{result.note}</div>}
+              </div>
+            )}
+
+            <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18 }}>
+              <div style={{ fontSize: 13, color: COLORS.inkSoft, marginBottom: 2 }}>
+                County overview — {crop}, {yieldType.replace('_', ' ')} {result ? '(estimated for current scenario)' : '(historical average)'}
+              </div>
+              <div style={{ fontSize: 11, color: COLORS.inkSoft, marginBottom: 12 }}>
+                {result
+                  ? "Approximate — each county's shade is the regional prediction scaled by that county's typical relationship to the regional average, not an independently trained per-county model."
+                  : (geoFeatures ? 'Actual Texas county boundaries, colored by historical average.' : geoLoading ? 'Loading county boundaries…' : 'Could not load real county boundaries — showing a simplified representative layout instead.')}
+              </div>
+
+              {projectedCounties ? (
+                <svg width="100%" viewBox={`0 0 ${projectedCounties.width} ${projectedCounties.height}`}>
+                  {projectedCounties.shapes.map((s) => {
+                    const fill = result ? scenarioColor(s.name) : (counties ? yieldColor(s.name) : COLORS.border);
+                    const isHovered = hovered === s.name;
+                    return (
+                      <path
+                        key={s.id}
+                        d={s.d}
+                        fill={fill}
+                        stroke={isHovered ? COLORS.ink : '#FFFFFF'}
+                        strokeWidth={isHovered ? 1.6 : 0.4}
+                        opacity={counties ? 0.92 : 0.6}
+                        style={{ cursor: 'pointer' }}
+                        onMouseEnter={() => setHovered(s.name)}
+                        onMouseLeave={() => setHovered(null)}
+                        onClick={() => handleCountyClick(s.name)}
+                      />
+                    );
+                  })}
+                </svg>
+              ) : (
+                <svg width="100%" viewBox={`0 0 ${4 * (tile + gap)} ${7 * (tile + gap) - gap + 10}`}>
+                  {Object.entries(FALLBACK_GRID).map(([division, list]) =>
+                    list.map((c) => {
+                      const x = c.x * (tile + gap);
+                      const y = c.y * (tile + gap);
+                      const fill = result ? scenarioColor(c.name) : (counties ? yieldColor(c.name) : COLORS.border);
+                      const isHovered = hovered === c.name;
+                      return (
+                        <g
+                          key={c.name}
+                          onMouseEnter={() => setHovered(c.name)}
+                          onMouseLeave={() => setHovered(null)}
+                          onClick={() => handleCountyClick(c.name)}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <rect
+                            x={x} y={y} width={tile} height={tile} rx={8}
+                            fill={fill}
+                            stroke={isHovered ? COLORS.ink : 'transparent'}
+                            strokeWidth={isHovered ? 2 : 0}
+                            opacity={counties ? 0.92 : 0.5}
+                          />
+                          <text x={x + tile / 2} y={y + tile / 2} textAnchor="middle" dominantBaseline="central"
+                                style={{ fontSize: 10, fill: '#fff', fontFamily: FONT_BODY, fontWeight: 500 }}>
+                            {c.name}
+                          </text>
+                        </g>
+                      );
+                    })
+                  )}
+                </svg>
+              )}
+              {hovered && (() => {
+                const hoveredRow = getCountyRow(hovered);
+                return (
+                <div style={{ marginTop: 10, fontSize: 13, background: COLORS.cream, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 10 }}>
+                  <strong>{hovered}</strong>
+                  {hoveredRow ? (
+                    <div style={{ color: COLORS.inkSoft, marginTop: 2 }}>
+                      Average {yieldType.replace('_', ' ')}: {hoveredRow[`${yieldType}_mean`] ?? 'n/a'} {crop === 'Cotton' ? 'lb/acre' : 'bu/acre'}
+                      {hoveredRow.latest_year && <> · latest recorded: {hoveredRow.latest_overall_yield} in {hoveredRow.latest_year}</>}
+                      {result && countyPredictionEstimate(hovered) != null && (
+                        <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${COLORS.border}` }}>
+                          <strong style={{ color: COLORS.tealDeep }}>
+                            Estimated for current scenario: {countyPredictionEstimate(hovered).toFixed(1)} {crop === 'Cotton' ? 'lb/acre' : 'bu/acre'}
+                          </strong>
+                          <div style={{ fontSize: 11, marginTop: 2 }}>
+                            Approximate — scaled from the regional prediction using this county's typical relationship to the regional average, not a separately trained county model.
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ color: COLORS.inkSoft, marginTop: 2 }}>
+                      {counties ? 'No data found for this county name.' : 'Connect to load county data.'}
+                    </div>
+                  )}
+                </div>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {selectedCounty && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(43,27,61,0.45)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, zIndex: 50,
+          }}
+          onClick={() => setSelectedCounty(null)}
+        >
+          <div
+            style={{
+              background: COLORS.panel, borderRadius: 12, padding: 24, maxWidth: 560, width: '100%',
+              maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+              <h2 style={{ fontFamily: FONT_HEAD, fontSize: 22, margin: 0, color: COLORS.tealDeep }}>{selectedCounty} County</h2>
+              <button
+                onClick={() => setSelectedCounty(null)}
+                style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: COLORS.inkSoft, lineHeight: 1 }}
+              >×</button>
+            </div>
+            <div style={{ fontSize: 13, color: COLORS.inkSoft, marginBottom: 16 }}>{crop}, Overall Yield</div>
+
+            {countyDetailLoading && <div style={{ color: COLORS.inkSoft }}>Loading…</div>}
+            {countyDetailError && <div style={{ color: COLORS.rust, fontSize: 13 }}>{countyDetailError}</div>}
+
+            {countyDetail && (() => {
+              const s = countyDetail.yield_stats;
+              const yearly = countyDetail.yearly || [];
+              const monthlyTemp = countyDetail.monthly_temp_climatology || [];
+              const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+              function BarChart(title, unit, data, color) {
+                const W = 480, H = 130, padL = 34, padB = 16, padT = 8;
+                const vals = data.map((d) => d.v).filter((v) => v != null);
+                const maxV = Math.max(...vals, 1);
+                const barW = (W - padL) / data.length;
+                return (
+                  <div style={{ marginBottom: 18 }}>
+                    <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 4 }}>{title} ({unit})</div>
+                    <svg width="100%" viewBox={`0 0 ${W} ${H}`}>
+                      <line x1={padL} y1={H - padB} x2={W} y2={H - padB} stroke={COLORS.border} strokeWidth="1" />
+                      <text x={padL - 4} y={padT + 6} textAnchor="end" fontSize="9" fill={COLORS.inkSoft}>{maxV.toFixed(0)}</text>
+                      <text x={padL - 4} y={H - padB} textAnchor="end" fontSize="9" fill={COLORS.inkSoft}>0</text>
+                      {data.map((d, i) => {
+                        if (d.v == null) return null;
+                        const h = ((H - padB - padT) * d.v) / maxV;
+                        return (
+                          <rect key={i} x={padL + i * barW + 0.5} y={H - padB - h} width={Math.max(barW - 1, 0.5)} height={h} fill={color} />
+                        );
+                      })}
+                      {data.map((d, i) => (
+                        i % 10 === 0 ? (
+                          <text key={i} x={padL + i * barW + barW / 2} y={H - 2} textAnchor="middle" fontSize="8" fill={COLORS.inkSoft}>{d.label}</text>
+                        ) : null
+                      ))}
+                    </svg>
+                  </div>
+                );
+              }
+
+              function LineChart(title, unit, values, labels, color) {
+                const W = 480, H = 120, padL = 34, padB = 16, padT = 8;
+                const nums = values.filter((v) => v != null);
+                if (!nums.length) return null;
+                const minV = Math.min(...nums), maxV = Math.max(...nums);
+                const span = maxV - minV || 1;
+                const stepX = (W - padL) / (values.length - 1);
+                const pts = values.map((v, i) => {
+                  const x = padL + i * stepX;
+                  const y = H - padB - ((v - minV) / span) * (H - padB - padT);
+                  return [x, y];
+                });
+                const d = pts.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+                return (
+                  <div style={{ marginBottom: 18 }}>
+                    <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 4 }}>{title} ({unit})</div>
+                    <svg width="100%" viewBox={`0 0 ${W} ${H}`}>
+                      <line x1={padL} y1={H - padB} x2={W} y2={H - padB} stroke={COLORS.border} strokeWidth="1" />
+                      <text x={padL - 4} y={padT + 6} textAnchor="end" fontSize="9" fill={COLORS.inkSoft}>{maxV.toFixed(0)}</text>
+                      <text x={padL - 4} y={H - padB} textAnchor="end" fontSize="9" fill={COLORS.inkSoft}>{minV.toFixed(0)}</text>
+                      <path d={d} fill="none" stroke={color} strokeWidth="2" />
+                      {pts.map(([x, y], i) => <circle key={i} cx={x} cy={y} r="2.2" fill={color} />)}
+                      {labels.map((lab, i) => (
+                        <text key={i} x={padL + i * stepX} y={H - 2} textAnchor="middle" fontSize="8" fill={COLORS.inkSoft}>{lab}</text>
+                      ))}
+                    </svg>
+                  </div>
+                );
+              }
+
+              const yieldUnit = crop === 'Cotton' ? 'lb/acre' : 'bu/acre';
+              const yieldSeries = yearly.map((y) => ({ v: y.yield, label: y.year }));
+              const precipSeries = yearly.map((y) => ({ v: y.annual_precip_mm, label: y.year }));
+
+              return (
+                <div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 20 }}>
+                    <tbody>
+                      <tr><td style={{ padding: '4px 0', color: COLORS.inkSoft }}>Number of observations</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{s.n}</td></tr>
+                      <tr><td style={{ padding: '4px 0', color: COLORS.inkSoft }}>Mean ({yieldUnit})</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{s.mean}</td></tr>
+                      <tr><td style={{ padding: '4px 0', color: COLORS.inkSoft }}>Standard deviation</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{s.std ?? 'n/a'}</td></tr>
+                      <tr><td style={{ padding: '4px 0', color: COLORS.inkSoft }}>Minimum ({yieldUnit})</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{s.min}</td></tr>
+                      <tr><td style={{ padding: '4px 0', color: COLORS.inkSoft }}>Year of minimum</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{s.year_of_min}</td></tr>
+                      <tr><td style={{ padding: '4px 0', color: COLORS.inkSoft }}>Maximum ({yieldUnit})</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{s.max}</td></tr>
+                      <tr><td style={{ padding: '4px 0', color: COLORS.inkSoft }}>Year of maximum</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{s.year_of_max}</td></tr>
+                    </tbody>
+                  </table>
+                  {BarChart('Annual Yield', yieldUnit, yieldSeries, COLORS.tealDeep)}
+                  {precipSeries.some((d) => d.v != null) && BarChart('Annual Precipitation', 'mm', precipSeries, COLORS.gold)}
+                  {monthlyTemp.some((v) => v != null) && LineChart('Monthly Temperature (climatology)', '°C', monthlyTemp, months, COLORS.rust)}
+                  {!precipSeries.some((d) => d.v != null) && !monthlyTemp.some((v) => v != null) && (
+                    <div style={{ fontSize: 12, color: COLORS.inkSoft, fontStyle: 'italic' }}>
+                      Climate data (precipitation, temperature) is not yet available for {crop} at the county level — only yield records.
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
