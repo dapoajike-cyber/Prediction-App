@@ -737,6 +737,7 @@ function TexasYieldExplorer() {
                     <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 4 }}>{title} ({unit})</div>
                     <svg width="100%" viewBox={`0 0 ${W} ${H}`}>
                       <line x1={padL} y1={H - padB} x2={W} y2={H - padB} stroke={COLORS.border} strokeWidth="1" />
+                      <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke={COLORS.border} strokeWidth="1" />
                       <text x={padL - 4} y={padT + 6} textAnchor="end" fontSize="9" fill={COLORS.inkSoft}>{maxV.toFixed(0)}</text>
                       <text x={padL - 4} y={H - padB} textAnchor="end" fontSize="9" fill={COLORS.inkSoft}>0</text>
                       {data.map((d, i) => {
@@ -787,6 +788,7 @@ function TexasYieldExplorer() {
                     </div>
                     <svg width="100%" viewBox={`0 0 ${W} ${H}`}>
                       <line x1={padL} y1={H - padB} x2={W} y2={H - padB} stroke={COLORS.border} strokeWidth="1" />
+                      <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke={COLORS.border} strokeWidth="1" />
                       <text x={padL - 4} y={padT + 6} textAnchor="end" fontSize="9" fill={COLORS.inkSoft}>{maxV.toFixed(0)}</text>
                       <text x={padL - 4} y={H - padB} textAnchor="end" fontSize="9" fill={COLORS.inkSoft}>{minV.toFixed(0)}</text>
                       {series.map((s) => s.values.map((v, i) => {
