@@ -727,24 +727,53 @@ function TexasYieldExplorer() {
               const annualTemp = countyDetail.annual_temp || [];
               const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
+              // Picks ~targetCount "nice" round-number tick values spanning
+              // [0, maxV] (or [minV, maxV] when a floor is supplied), so the
+              // Y-axis reads like a calibrated ruler instead of just min/max.
+              function niceTicks(minV, maxV, targetCount) {
+                const range = maxV - minV || 1;
+                const rawStep = range / targetCount;
+                const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+                const norm = rawStep / mag;
+                const niceNorm = norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10;
+                const step = niceNorm * mag;
+                const niceMin = Math.floor(minV / step) * step;
+                const niceMax = Math.ceil(maxV / step) * step;
+                const ticks = [];
+                for (let v = niceMin; v <= niceMax + step * 0.001; v += step) {
+                  ticks.push(Math.round(v * 1000) / 1000);
+                }
+                return ticks;
+              }
+
+              function fmtTick(v) {
+                return Math.abs(v) >= 100 ? Math.round(v).toString() : (Math.round(v * 10) / 10).toString();
+              }
+
               function BarChart(title, unit, data, color) {
-                const W = 560, H = 130, padL = 34, padB = 16, padT = 8;
+                const W = 560, H = 140, padL = 40, padB = 16, padT = 8;
                 const vals = data.map((d) => d.v).filter((v) => v != null);
-                const maxV = Math.max(...vals, 1);
+                const rawMax = Math.max(...vals, 1);
+                const ticks = niceTicks(0, rawMax, 4);
+                const maxV = ticks[ticks.length - 1];
                 const barW = (W - padL) / data.length;
+                const yFor = (v) => H - padB - ((H - padB - padT) * v) / maxV;
                 return (
                   <div style={{ marginBottom: 18 }}>
                     <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 4 }}>{title} ({unit})</div>
                     <svg width="100%" viewBox={`0 0 ${W} ${H}`}>
-                      <line x1={padL} y1={H - padB} x2={W} y2={H - padB} stroke={COLORS.border} strokeWidth="1" />
+                      {ticks.map((t, i) => (
+                        <g key={i}>
+                          <line x1={padL} y1={yFor(t)} x2={W} y2={yFor(t)} stroke={COLORS.border} strokeWidth={t === 0 ? 1 : 0.5} />
+                          <text x={padL - 4} y={yFor(t) + 3} textAnchor="end" fontSize="9" fill={COLORS.inkSoft}>{fmtTick(t)}</text>
+                        </g>
+                      ))}
                       <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke={COLORS.border} strokeWidth="1" />
-                      <text x={padL - 4} y={padT + 6} textAnchor="end" fontSize="9" fill={COLORS.inkSoft}>{maxV.toFixed(0)}</text>
-                      <text x={padL - 4} y={H - padB} textAnchor="end" fontSize="9" fill={COLORS.inkSoft}>0</text>
                       {data.map((d, i) => {
                         if (d.v == null) return null;
-                        const h = ((H - padB - padT) * d.v) / maxV;
+                        const h = yFor(0) - yFor(d.v);
                         return (
-                          <rect key={i} x={padL + i * barW + 0.5} y={H - padB - h} width={Math.max(barW - 1, 0.5)} height={h} fill={color} />
+                          <rect key={i} x={padL + i * barW + 0.5} y={yFor(d.v)} width={Math.max(barW - 1, 0.5)} height={h} fill={color} />
                         );
                       })}
                       {data.map((d, i) => (
@@ -763,10 +792,12 @@ function TexasYieldExplorer() {
               // series. Matches Dr. Awal's reference exactly: 3 values per
               // year, not 36.
               function TempScatterChart(title, unit, series, labels) {
-                const W = 560, H = 170, padL = 34, padB = 22, padT = 10;
+                const W = 560, H = 170, padL = 40, padB = 22, padT = 10;
                 const allVals = series.flatMap((s) => s.values).filter((v) => v != null);
                 if (!allVals.length) return null;
-                const minV = Math.min(...allVals), maxV = Math.max(...allVals);
+                const rawMin = Math.min(...allVals), rawMax = Math.max(...allVals);
+                const ticks = niceTicks(rawMin, rawMax, 4);
+                const minV = ticks[0], maxV = ticks[ticks.length - 1];
                 const span = (maxV - minV) || 1;
                 const n = labels.length;
                 const stepX = n > 1 ? (W - padL) / (n - 1) : 0;
@@ -787,10 +818,14 @@ function TexasYieldExplorer() {
                       ))}
                     </div>
                     <svg width="100%" viewBox={`0 0 ${W} ${H}`}>
+                      {ticks.map((t, i) => (
+                        <g key={i}>
+                          <line x1={padL} y1={yFor(t)} x2={W} y2={yFor(t)} stroke={COLORS.border} strokeWidth="0.5" />
+                          <text x={padL - 4} y={yFor(t) + 3} textAnchor="end" fontSize="9" fill={COLORS.inkSoft}>{fmtTick(t)}</text>
+                        </g>
+                      ))}
                       <line x1={padL} y1={H - padB} x2={W} y2={H - padB} stroke={COLORS.border} strokeWidth="1" />
                       <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke={COLORS.border} strokeWidth="1" />
-                      <text x={padL - 4} y={padT + 6} textAnchor="end" fontSize="9" fill={COLORS.inkSoft}>{maxV.toFixed(0)}</text>
-                      <text x={padL - 4} y={H - padB} textAnchor="end" fontSize="9" fill={COLORS.inkSoft}>{minV.toFixed(0)}</text>
                       {series.map((s) => s.values.map((v, i) => {
                         if (v == null) return null;
                         const x = padL + i * stepX;
