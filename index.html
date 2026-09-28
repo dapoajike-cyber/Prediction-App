@@ -463,7 +463,7 @@ function TexasYieldExplorer() {
       <div style={{ maxWidth: 960, margin: '0 auto' }}>
         <div style={{ width: 64, height: 4, background: COLORS.pvamuGold, borderRadius: 2, marginBottom: 14 }} />
         <h1 style={{ fontFamily: FONT_HEAD, fontSize: 30, fontWeight: 500, margin: '0 0 4px', color: COLORS.tealDeep }}>
-          Texas yield explorer
+          Texas Yield Explorer
         </h1>
         <p style={{ fontSize: 14, color: COLORS.inkSoft, margin: '0 0 24px', maxWidth: 560 }}>
           Predict corn and cotton yield from climate inputs, using the trained random forest models. Connect to the backend below to run real predictions.
@@ -724,7 +724,7 @@ function TexasYieldExplorer() {
             {countyDetail && (() => {
               const s = countyDetail.yield_stats;
               const yearly = countyDetail.yearly || [];
-              const monthlySeries = countyDetail.monthly_series || [];
+              const annualTemp = countyDetail.annual_temp || [];
               const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
               function BarChart(title, unit, data, color) {
@@ -756,9 +756,11 @@ function TexasYieldExplorer() {
                 );
               }
 
-              // Three-series dotted plot of Tmax / Tmin / Tmean across the FULL
-              // historical monthly record (not a 12-point climatology average).
-              // Missing months (years with no climate record) leave real gaps.
+              // Three-series dotted plot of Tmax / Tmin / Tmean -- ONE point
+              // per series per YEAR (annual mean across that year's 12
+              // months), continuous across the full record, not a monthly
+              // series. Matches Dr. Awal's reference exactly: 3 values per
+              // year, not 36.
               function TempScatterChart(title, unit, series, labels) {
                 const W = 560, H = 170, padL = 34, padB = 22, padT = 10;
                 const allVals = series.flatMap((s) => s.values).filter((v) => v != null);
@@ -769,8 +771,8 @@ function TexasYieldExplorer() {
                 const stepX = n > 1 ? (W - padL) / (n - 1) : 0;
                 const yFor = (v) => H - padB - ((v - minV) / span) * (H - padB - padT);
 
-                // Show at most ~14 x-axis tick labels (year marks), spaced evenly
-                const tickEvery = Math.max(1, Math.ceil(n / 14 / 12) * 12); // land on Jan of a year
+                // Show at most ~10 year tick labels, spaced evenly
+                const tickEvery = Math.max(1, Math.round(n / 10));
 
                 return (
                   <div style={{ marginBottom: 18 }}>
@@ -791,7 +793,7 @@ function TexasYieldExplorer() {
                         if (v == null) return null;
                         const x = padL + i * stepX;
                         const y = yFor(v);
-                        return <circle key={`${s.label}-${i}`} cx={x} cy={y} r="1.6" fill={s.color} opacity="0.85" />;
+                        return <circle key={`${s.label}-${i}`} cx={x} cy={y} r="2.4" fill={s.color} opacity="0.9" />;
                       }))}
                       {labels.map((lab, i) => (
                         i % tickEvery === 0 ? (
@@ -807,11 +809,11 @@ function TexasYieldExplorer() {
               const yieldSeries = yearly.map((y) => ({ v: y.yield, label: y.year }));
               const precipSeries = yearly.map((y) => ({ v: y.annual_precip_mm, label: y.year }));
 
-              const tempLabels = monthlySeries.map((m) => `${String(m.year).slice(2)}`);
+              const tempLabels = annualTemp.map((y) => y.year);
               const tempSeries = [
-                { label: 'Tmax', color: COLORS.rust, values: monthlySeries.map((m) => m.tmax) },
-                { label: 'Tmean', color: COLORS.gold, values: monthlySeries.map((m) => m.tmean) },
-                { label: 'Tmin', color: COLORS.teal, values: monthlySeries.map((m) => m.tmin) },
+                { label: 'Tmax', color: COLORS.rust, values: annualTemp.map((y) => y.tmax) },
+                { label: 'Tmean', color: COLORS.gold, values: annualTemp.map((y) => y.tmean) },
+                { label: 'Tmin', color: COLORS.teal, values: annualTemp.map((y) => y.tmin) },
               ];
               const hasTempData = tempSeries.some((s) => s.values.some((v) => v != null));
 
@@ -830,7 +832,7 @@ function TexasYieldExplorer() {
                   </table>
                   {BarChart('Annual Yield', yieldUnit, yieldSeries, COLORS.tealDeep)}
                   {precipSeries.some((d) => d.v != null) && BarChart('Annual Precipitation', 'mm', precipSeries, COLORS.gold)}
-                  {hasTempData && TempScatterChart('Monthly Temperature — full historical record', '°C', tempSeries, tempLabels)}
+                  {hasTempData && TempScatterChart('Annual Temperature — Tmax, Tmean, Tmin', '°C', tempSeries, tempLabels)}
                   {!precipSeries.some((d) => d.v != null) && !hasTempData && (
                     <div style={{ fontSize: 12, color: COLORS.inkSoft, fontStyle: 'italic' }}>
                       Climate data (precipitation, temperature) is not yet available for {crop} at the county level — only yield records.
