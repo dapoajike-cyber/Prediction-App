@@ -156,7 +156,9 @@ function TexasYieldExplorer() {
   const [yieldType, setYieldType] = React.useState('Overall_Yield');
   const [mode, setMode] = React.useState('manual');
   const [climateValues, setClimateValues] = React.useState({});
-  const [targetYear, setTargetYear] = React.useState(2029);
+  const [climateAutoFillNote, setClimateAutoFillNote] = React.useState('');
+  const [climateAutoFillError, setClimateAutoFillError] = React.useState('');
+  const [year, setYear] = React.useState(2025);
 
   const [result, setResult] = React.useState(null);
   const [predicting, setPredicting] = React.useState(false);
@@ -164,7 +166,12 @@ function TexasYieldExplorer() {
 
   const [counties, setCounties] = React.useState(null);
   const [hovered, setHovered] = React.useState(null);
+  // selectedCounty is now the single source of truth for BOTH "which county
+  // is being predicted for" and "which county's historical detail is shown
+  // in the modal" -- per Dr. Awal's request, a county must be selected first
+  // and the prediction is scoped to it (no more statewide-with-ratio).
   const [selectedCounty, setSelectedCounty] = React.useState(null);
+  const [showHistoryModal, setShowHistoryModal] = React.useState(false);
   const [countyDetail, setCountyDetail] = React.useState(null);
   const [countyDetailLoading, setCountyDetailLoading] = React.useState(false);
   const [countyDetailError, setCountyDetailError] = React.useState('');
@@ -304,6 +311,10 @@ function TexasYieldExplorer() {
   }, [connStatus, crop]);
 
   async function runPrediction() {
+    if (!selectedCounty) {
+      setPredictError('Select a county first — predictions are made for one county at a time.');
+      return;
+    }
     if (!activeModel) {
       setPredictError('No trained model for this combination.');
       return;
@@ -319,7 +330,8 @@ function TexasYieldExplorer() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            crop, region, window_months_count: windowCount, yield_type: yieldType, year: Number(targetYear),
+            crop, region, window_months_count: windowCount, yield_type: yieldType,
+            year: Number(year), county: selectedCounty,
           }),
         });
       } else {
@@ -346,7 +358,9 @@ function TexasYieldExplorer() {
         throw new Error(errBody.detail || `Server responded with ${res.status}`);
       }
       const data = await res.json();
-      setResult(data);
+      // /predict (manual mode) doesn't know which county the climate came
+      // from, so label the result with the selected county on the client side.
+      setResult({ ...data, county: data.county || selectedCounty });
     } catch (e) {
       setPredictError(e.message || 'Prediction failed.');
     } finally {
@@ -380,22 +394,6 @@ function TexasYieldExplorer() {
     return mixColor(stops[idx], stops[idx + 1], localT);
   }
 
-  // Colors counties by the CURRENT SCENARIO's estimated yield instead of the
-  // historical average -- used once a prediction has been made. This is the
-  // same approximation as countyPredictionEstimate (regional prediction,
-  // scaled by each county's historical relationship to the regional average),
-  // not an independently trained per-county model.
-  function scenarioColor(county) {
-    const est = countyPredictionEstimate(county);
-    if (est == null) return COLORS.border;
-    const max = crop === 'Cotton' ? 900 : 160;
-    const t = Math.max(0, Math.min(1, est / max));
-    const stops = [COLORS.rust, COLORS.gold, COLORS.olive];
-    const idx = t < 0.5 ? 0 : 1;
-    const localT = t < 0.5 ? t / 0.5 : (t - 0.5) / 0.5;
-    return mixColor(stops[idx], stops[idx + 1], localT);
-  }
-
   function normalizeCountyName(name) {
     return String(name).toLowerCase().replace(/[\s.'-]/g, '');
   }
@@ -418,8 +416,29 @@ function TexasYieldExplorer() {
     return counties[name] || normalizedCountyIndex[normalizeCountyName(name)] || null;
   }
 
-  async function handleCountyClick(name) {
+  // Sets the county the app will predict for, and auto-selects the Region
+  // that best matches it (per Dr. Awal's request) -- the user can still
+  // change the Region dropdown afterward; it's just the starting point.
+  function applyCountyDefaults(name) {
+    const row = getCountyRow(name);
+    if (row && row.default_region) {
+      setRegion(row.default_region);
+      const windowsForNewRegion = modelsForCrop
+        .filter((m) => m.region === row.default_region)
+        .map((m) => m.window_months_count)
+        .sort((a, b) => a - b);
+      if (windowsForNewRegion.length) setWindowCount(windowsForNewRegion[0]);
+    }
+  }
+
+  function chooseCounty(name) {
     setSelectedCounty(name);
+    setResult(null);
+    setPredictError('');
+    applyCountyDefaults(name);
+  }
+
+  async function loadCountyDetail(name) {
     setCountyDetail(null);
     setCountyDetailError('');
     setCountyDetailLoading(true);
@@ -439,20 +458,55 @@ function TexasYieldExplorer() {
     }
   }
 
-  function countyPredictionEstimate(county) {
-    if (!result || !counties) return null;
-    const row = getCountyRow(county);
-    if (!row) return null;
-    const countyMean = row[`${yieldType}_mean`];
-    if (countyMean == null) return null;
-    const allMeans = Object.values(counties)
-      .map((r) => r[`${yieldType}_mean`])
-      .filter((v) => v != null);
-    if (!allMeans.length) return null;
-    const regionalMean = allMeans.reduce((a, b) => a + b, 0) / allMeans.length;
-    if (!regionalMean) return null;
-    return result.prediction * (countyMean / regionalMean);
+  // Clicking a county on the map both selects it as the prediction target
+  // AND opens its historical-record panel. Choosing a county from the
+  // dropdown (chooseCounty alone) sets the prediction target without
+  // interrupting the flow with a modal.
+  function handleCountyClick(name) {
+    chooseCounty(name);
+    setShowHistoryModal(true);
+    loadCountyDetail(name);
   }
+
+  function openHistoryForSelected() {
+    if (!selectedCounty) return;
+    setShowHistoryModal(true);
+    loadCountyDetail(selectedCounty);
+  }
+
+  // Auto-fills the manual climate-entry fields from the selected county's
+  // own recorded (or, beyond its record, extrapolated) climate for the
+  // chosen year -- still fully editable afterward.
+  React.useEffect(() => {
+    if (mode !== 'manual' || !selectedCounty || !activeModel || connStatus !== 'connected') {
+      return;
+    }
+    const base = backendUrl.replace(/\/$/, '');
+    setClimateAutoFillError('');
+    fetch(`${base}/county_climate?county=${encodeURIComponent(selectedCounty)}&year=${Number(year)}`)
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.detail || 'Could not load climate for this county/year.');
+        return body;
+      })
+      .then((data) => {
+        const next = {};
+        Object.entries(data.climate || {}).forEach(([k, v]) => {
+          if (v != null) next[k] = v;
+        });
+        setClimateValues((prev) => ({ ...prev, ...next }));
+        setClimateAutoFillNote(
+          data.estimated
+            ? `${selectedCounty} County's ${year} climate is beyond its historical record (data through ${data.max_known_year}) — values below are extrapolated from its own trend. Edit as needed.`
+            : `Auto-filled from ${selectedCounty} County's recorded ${year} climate. Edit any value as needed.`
+        );
+      })
+      .catch((e) => {
+        setClimateAutoFillNote('');
+        setClimateAutoFillError(e.message || 'Could not load climate for this county/year.');
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCounty, year, mode, activeModel, connStatus]);
 
   const tile = 78, gap = 6;
 
@@ -509,6 +563,27 @@ function TexasYieldExplorer() {
                   <option value="Corn">Corn</option>
                 </select>
               </Field>
+              <Field label="County (required — the prediction is for this county only)">
+                <select
+                  style={selectStyle}
+                  value={selectedCounty ?? ''}
+                  onChange={(e) => { if (e.target.value) chooseCounty(e.target.value); }}
+                >
+                  <option value="" disabled>{counties ? 'Select a county…' : 'Loading counties…'}</option>
+                  {counties && Object.keys(counties).sort().map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+                {selectedCounty && (
+                  <button
+                    type="button"
+                    onClick={openHistoryForSelected}
+                    style={{ background: 'none', border: 'none', color: COLORS.tealDeep, fontSize: 12, padding: '4px 0 0', cursor: 'pointer', textDecoration: 'underline' }}
+                  >
+                    View {selectedCounty} County's historical record
+                  </button>
+                )}
+              </Field>
               <Field label="Region">
                 <select style={selectStyle} value={region} onChange={(e) => {
                   const newRegion = e.target.value;
@@ -523,6 +598,9 @@ function TexasYieldExplorer() {
                 }}>
                   {regionsAvailable.map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
+                <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 3 }}>
+                  Auto-set from the selected County — you can change it here if needed.
+                </div>
               </Field>
               <Field label="Growing-season window">
                 <select style={selectStyle} value={windowCount ?? ''} onChange={(e) => { setWindowCount(Number(e.target.value)); setResult(null); }}>
@@ -545,29 +623,40 @@ function TexasYieldExplorer() {
                 <button style={mode === 'year' ? btnPrimary : btnGhost} onClick={() => setMode('year')}>Pick a year</button>
               </div>
 
+              <Field label={mode === 'year' ? 'Year to predict' : 'Reference year (auto-fills climate below)'}>
+                <input style={inputStyle} type="number" value={year} onChange={(e) => setYear(e.target.value)} />
+              </Field>
+
               {mode === 'manual' && activeModel && (
-                <div style={{ maxHeight: 260, overflowY: 'auto', paddingRight: 4 }}>
-                  {activeModel.feature_columns.filter((c) => c !== 'CO2_ppm').map((col) => (
-                    <Field key={col} label={climateFieldLabel(col)}>
-                      <input
-                        style={inputStyle}
-                        type="number"
-                        value={climateValues[col] ?? ''}
-                        onChange={(e) => setClimateValues((v) => ({ ...v, [col]: e.target.value }))}
-                      />
-                    </Field>
-                  ))}
+                <div>
+                  {selectedCounty && climateAutoFillError && (
+                    <div style={{ fontSize: 11, color: COLORS.rust, marginBottom: 8 }}>{climateAutoFillError}</div>
+                  )}
+                  {selectedCounty && !climateAutoFillError && climateAutoFillNote && (
+                    <div style={{ fontSize: 11, color: COLORS.goldDeep, marginBottom: 8, fontStyle: 'italic' }}>{climateAutoFillNote}</div>
+                  )}
+                  {!selectedCounty && (
+                    <div style={{ fontSize: 11, color: COLORS.inkSoft, marginBottom: 8 }}>
+                      Select a county above to auto-fill these fields with its own climate, or enter values by hand.
+                    </div>
+                  )}
+                  <div style={{ maxHeight: 260, overflowY: 'auto', paddingRight: 4 }}>
+                    {activeModel.feature_columns.filter((c) => c !== 'CO2_ppm').map((col) => (
+                      <Field key={col} label={climateFieldLabel(col)}>
+                        <input
+                          style={inputStyle}
+                          type="number"
+                          value={climateValues[col] ?? ''}
+                          onChange={(e) => setClimateValues((v) => ({ ...v, [col]: e.target.value }))}
+                        />
+                      </Field>
+                    ))}
+                  </div>
                 </div>
               )}
 
-              {mode === 'year' && (
-                <Field label="Year to predict">
-                  <input style={inputStyle} type="number" value={targetYear} onChange={(e) => setTargetYear(e.target.value)} />
-                </Field>
-              )}
-
-              <button style={{ ...btnPrimary, width: '100%', marginTop: 8 }} onClick={runPrediction} disabled={predicting || !activeModel}>
-                {predicting ? 'Predicting…' : 'Predict yield'}
+              <button style={{ ...btnPrimary, width: '100%', marginTop: 8 }} onClick={runPrediction} disabled={predicting || !activeModel || !selectedCounty}>
+                {predicting ? 'Predicting…' : selectedCounty ? `Predict yield for ${selectedCounty} County` : 'Select a county to predict'}
               </button>
               {!activeModel && <div style={{ fontSize: 12, color: COLORS.rust, marginTop: 6 }}>No trained model for this combination.</div>}
               {predictError && <div style={{ fontSize: 12, color: COLORS.rust, marginTop: 6 }}>{predictError}</div>}
@@ -577,7 +666,12 @@ function TexasYieldExplorer() {
           <div>
             {result && (
               <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 20, marginBottom: 20 }}>
-                <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 4 }}>{region} · {crop} · {yieldType.replace('_', ' ')}</div>
+                <div style={{ fontFamily: FONT_HEAD, fontSize: 18, fontWeight: 500, color: COLORS.tealDeep, marginBottom: 2 }}>
+                  Predicted yield for {result.county} County
+                </div>
+                <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 4 }}>
+                  Using the "{region}" model · {crop} · {yieldType.replace('_', ' ')}
+                </div>
                 <div style={{ fontFamily: FONT_HEAD, fontSize: 40, fontWeight: 500, color: COLORS.tealDeep }}>
                   {result.prediction} <span style={{ fontSize: 16, color: COLORS.inkSoft }}>{result.unit}</span>
                 </div>
@@ -593,29 +687,28 @@ function TexasYieldExplorer() {
 
             <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18 }}>
               <div style={{ fontSize: 13, color: COLORS.inkSoft, marginBottom: 2 }}>
-                County overview — {crop}, {yieldType.replace('_', ' ')} {result ? '(estimated for current scenario)' : '(historical average)'}
+                County overview — {crop}, {yieldType.replace('_', ' ')} (historical average)
               </div>
               <div style={{ fontSize: 11, color: COLORS.inkSoft, marginBottom: 6 }}>
-                {result
-                  ? "Approximate — each county's shade is the regional prediction scaled by that county's typical relationship to the regional average, not an independently trained per-county model."
-                  : (geoFeatures ? 'Actual Texas county boundaries, colored by historical average.' : geoLoading ? 'Loading county boundaries…' : 'Could not load real county boundaries — showing a simplified representative layout instead.')}
+                {geoFeatures ? 'Actual Texas county boundaries, colored by historical average.' : geoLoading ? 'Loading county boundaries…' : 'Could not load real county boundaries — showing a simplified representative layout instead.'}
               </div>
               <div style={{ fontSize: 11, color: COLORS.goldDeep, marginBottom: 12, fontStyle: 'italic' }}>
-                Note: hovering or clicking a county only shows that county's historical data — it does not change what is being predicted. The prediction above always reflects the Region selected on the left.
+                Click a county on the map (or use the County dropdown on the left) to select it as the county you want to predict for.
               </div>
 
               {projectedCounties ? (
                 <svg width="100%" viewBox={`0 0 ${projectedCounties.width} ${projectedCounties.height}`}>
                   {projectedCounties.shapes.map((s) => {
-                    const fill = result ? scenarioColor(s.name) : (counties ? yieldColor(s.name) : COLORS.border);
+                    const fill = counties ? yieldColor(s.name) : COLORS.border;
                     const isHovered = hovered === s.name;
+                    const isSelected = selectedCounty === s.name;
                     return (
                       <path
                         key={s.id}
                         d={s.d}
                         fill={fill}
-                        stroke={isHovered ? COLORS.ink : '#FFFFFF'}
-                        strokeWidth={isHovered ? 1.6 : 0.4}
+                        stroke={isSelected ? COLORS.tealDeep : (isHovered ? COLORS.ink : '#FFFFFF')}
+                        strokeWidth={isSelected ? 2.2 : (isHovered ? 1.6 : 0.4)}
                         opacity={counties ? 0.92 : 0.6}
                         style={{ cursor: 'pointer' }}
                         onMouseEnter={() => setHovered(s.name)}
@@ -631,8 +724,9 @@ function TexasYieldExplorer() {
                     list.map((c) => {
                       const x = c.x * (tile + gap);
                       const y = c.y * (tile + gap);
-                      const fill = result ? scenarioColor(c.name) : (counties ? yieldColor(c.name) : COLORS.border);
+                      const fill = counties ? yieldColor(c.name) : COLORS.border;
                       const isHovered = hovered === c.name;
+                      const isSelected = selectedCounty === c.name;
                       return (
                         <g
                           key={c.name}
@@ -644,8 +738,8 @@ function TexasYieldExplorer() {
                           <rect
                             x={x} y={y} width={tile} height={tile} rx={8}
                             fill={fill}
-                            stroke={isHovered ? COLORS.ink : 'transparent'}
-                            strokeWidth={isHovered ? 2 : 0}
+                            stroke={isSelected ? COLORS.tealDeep : (isHovered ? COLORS.ink : 'transparent')}
+                            strokeWidth={isSelected ? 3 : (isHovered ? 2 : 0)}
                             opacity={counties ? 0.92 : 0.5}
                           />
                           <text x={x + tile / 2} y={y + tile / 2} textAnchor="middle" dominantBaseline="central"
@@ -662,20 +756,13 @@ function TexasYieldExplorer() {
                 const hoveredRow = getCountyRow(hovered);
                 return (
                 <div style={{ marginTop: 10, fontSize: 13, background: COLORS.cream, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 10 }}>
-                  <strong>{hovered}</strong>
+                  <strong>{hovered}</strong>{selectedCounty === hovered && <span style={{ color: COLORS.tealDeep, fontSize: 11, marginLeft: 6 }}>● selected for prediction</span>}
                   {hoveredRow ? (
                     <div style={{ color: COLORS.inkSoft, marginTop: 2 }}>
                       Average {yieldType.replace('_', ' ')}: {hoveredRow[`${yieldType}_mean`] ?? 'n/a'} {crop === 'Cotton' ? 'lb/acre' : 'bu/acre'}
                       {hoveredRow.latest_year && <> · latest recorded: {hoveredRow.latest_overall_yield} in {hoveredRow.latest_year}</>}
-                      {result && countyPredictionEstimate(hovered) != null && (
-                        <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${COLORS.border}` }}>
-                          <strong style={{ color: COLORS.tealDeep }}>
-                            Estimated for current scenario: {countyPredictionEstimate(hovered).toFixed(1)} {crop === 'Cotton' ? 'lb/acre' : 'bu/acre'}
-                          </strong>
-                          <div style={{ fontSize: 11, marginTop: 2 }}>
-                            Approximate — scaled from the regional prediction using this county's typical relationship to the regional average, not a separately trained county model.
-                          </div>
-                        </div>
+                      {selectedCounty !== hovered && (
+                        <div style={{ fontSize: 11, marginTop: 4, color: COLORS.tealDeep }}>Click to select this county for prediction.</div>
                       )}
                     </div>
                   ) : (
@@ -691,13 +778,13 @@ function TexasYieldExplorer() {
         </div>
       </div>
 
-      {selectedCounty && (
+      {showHistoryModal && selectedCounty && (
         <div
           style={{
             position: 'fixed', inset: 0, background: 'rgba(43,27,61,0.45)',
             display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, zIndex: 50,
           }}
-          onClick={() => setSelectedCounty(null)}
+          onClick={() => setShowHistoryModal(false)}
         >
           <div
             style={{
@@ -709,13 +796,13 @@ function TexasYieldExplorer() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
               <h2 style={{ fontFamily: FONT_HEAD, fontSize: 22, margin: 0, color: COLORS.tealDeep }}>{selectedCounty} County</h2>
               <button
-                onClick={() => setSelectedCounty(null)}
+                onClick={() => setShowHistoryModal(false)}
                 style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: COLORS.inkSoft, lineHeight: 1 }}
               >×</button>
             </div>
             <div style={{ fontSize: 13, color: COLORS.inkSoft, marginBottom: 4 }}>{crop}, Overall Yield</div>
             <div style={{ fontSize: 11, color: COLORS.goldDeep, marginBottom: 16, fontStyle: 'italic' }}>
-              This panel shows {selectedCounty} County's own historical record. It does not change the Region selected for prediction above.
+              {selectedCounty} County's own historical record, and the county currently selected for prediction above.
             </div>
 
             {countyDetailLoading && <div style={{ color: COLORS.inkSoft }}>Loading…</div>}
