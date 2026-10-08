@@ -67,6 +67,31 @@ const FALLBACK_GRID = {
   ],
 };
 
+// Each Texas county's official centroid (latitude, longitude), as supplied
+// by Dr. Awal (Texas_Counties_Centroid_Map CSV). [name, lat, lon] triples.
+// Clicking the map resolves the click to a (lon, lat) point and matches it
+// to the nearest of these centroids -- so the county that gets predicted is
+// always exactly one of these 254 reference points, not just "whichever
+// polygon the click landed inside."
+const COUNTY_CENTROIDS = [["Foard",33.974085,-99.778711],["Blanco",30.266361,-98.399741],["Hockley",33.607504,-102.343092],["Llano",30.705666,-98.683874],["Swisher",34.53065,-101.734951],["Titus",33.216091,-94.965098],["Navarro",32.046954,-96.472481],["Brazoria",29.193454,-95.455785],["Hidalgo",26.396627,-98.180887],["Archer",33.615392,-98.687834],["Refugio",28.326814,-97.16547],["Andrews",32.305063,-102.637884],["Galveston",29.394244,-94.96475],["De Witt",29.082016,-97.35667],["Gonzales",29.456415,-97.492799],["Wharton",29.277836,-96.221974],["Fannin",33.593969,-96.106568],["Madison",30.965646,-95.928184],["Moore",35.837689,-101.892956],["Tyler",30.771261,-94.376514],["Lipscomb",36.277784,-100.27317],["Burleson",30.492461,-96.621094],["Jim Hogg",27.043405,-98.697292],["Throckmorton",33.177539,-99.212368],["Kleberg",27.432744,-97.728898],["Shelby",31.792422,-94.144953],["Garza",33.179911,-101.29845],["Karnes",28.904938,-97.859606],["Reeves",31.323071,-103.693143],["Houston",31.317641,-95.422254],["El Paso",31.768623,-106.235223],["Carson",35.403468,-101.354204],["Medina",29.355205,-99.110083],["Wichita",33.984216,-98.701534],["Chambers",29.739123,-94.608913],["Donley",34.965402,-100.81405],["Hopkins",33.149338,-95.564142],["Lampasas",31.196278,-98.241427],["Falls",31.25317,-96.935795],["Stephens",32.735842,-98.83612],["Travis",30.334233,-97.781947],["Roberts",35.838558,-100.813569],["Crosby",33.614599,-101.299861],["Kerr",30.06153,-99.35017],["Wood",32.786344,-95.382065],["Jack",33.233458,-98.172551],["Marion",32.797979,-94.357252],["Hale",34.070518,-101.826908],["Jeff Davis",30.715593,-104.140354],["Tarrant",32.771852,-97.291165],["Waller",30.010937,-95.987689],["Reagan",31.366177,-101.523011],["Smith",32.375146,-95.269095],["Van Zandt",32.56369,-95.836486],["Cooke",33.638465,-97.212476],["Zavala",28.865306,-99.76102],["Hall",34.530741,-100.680988],["Kendall",29.94464,-98.711605],["Goliad",28.657086,-97.426461],["Yoakum",33.172935,-102.827879],["Knox",33.606148,-99.741443],["McLennan",31.552345,-97.201849],["Brewster",29.812058,-103.251891],["Panola",32.162229,-94.305529],["Bandera",29.747248,-99.246373],["Parmer",34.530145,-102.784594],["Rockwall",32.897868,-96.407806],["Trinity",31.088507,-95.135517],["Bosque",31.900505,-97.634376],["Coke",31.888493,-100.529875],["Franklin",33.175507,-95.218414],["Hill",31.99079,-97.132414],["Calhoun",28.489669,-96.647081],["Irion",31.303932,-100.982413],["Midland",31.869211,-102.031503],["Brown",31.774323,-98.999896],["Wilson",29.173159,-98.08621],["Oldham",35.404976,-102.602995],["Freestone",31.704864,-96.149185],["Sabine",31.343219,-93.851704],["Deaf Smith",34.96602,-102.604816],["Angelina",31.254759,-94.611742],["Kent",33.182845,-100.779103],["Red River",33.620745,-95.050189],["Kinney",29.350003,-100.417844],["Denton",33.205574,-97.116812],["Sutton",30.497472,-100.538226],["Guadalupe",29.582572,-97.948503],["Winkler",31.850086,-103.048479],["Dimmit",28.421612,-99.760574],["Wise",33.215851,-97.654441],["Hemphill",35.837502,-100.270463],["Potter",35.401289,-101.894048],["Childress",34.529293,-100.207566],["Willacy",26.471329,-97.643033],["Bastrop",30.103535,-97.311877],["Kimble",30.486763,-99.748927],["Scurry",32.747201,-100.916507],["Ochiltree",36.278463,-100.815653],["Hansford",36.277532,-101.354562],["Hartley",35.839968,-102.602884],["Cameron",26.138477,-97.515],["Matagorda",28.86711,-95.985339],["Burnet",30.788434,-98.182524],["Rains",32.870042,-95.793475],["Hays",30.057827,-98.031041],["Mason",30.717423,-99.226303],["Ward",31.509424,-103.102464],["Delta",33.386236,-95.672217],["Nueces",27.726215,-97.617673],["Callahan",32.297774,-99.373597],["Bell",31.037783,-97.477908],["Cherokee",31.836956,-95.165152],["Ellis",32.348393,-96.794674],["Lubbock",33.610194,-101.820575],["Terrell",30.225026,-102.076453],["Crockett",30.722919,-101.411836],["Atascosa",28.894184,-98.527413],["Ector",31.869082,-102.543091],["Brazos",30.661043,-96.302294],["Aransas",28.127096,-96.99259],["Dallas",32.766537,-96.777819],["Howard",32.306102,-101.43551],["Motley",34.07409,-100.779896],["San Augustine",31.39427,-94.168098],["Maverick",28.742609,-100.314464],["Erath",32.236404,-98.217228],["Dickens",33.616634,-100.778814],["Caldwell",29.836779,-97.619835],["Dawson",32.742581,-101.947614],["Camp",32.973218,-94.978602],["Duval",27.681334,-98.508897],["Hunt",33.123531,-96.0855],["Mills",31.495243,-98.595527],["Val Verde",29.893006,-101.15171],["Pecos",30.781,-102.723574],["Baylor",33.616481,-99.21352],["Gregg",32.480365,-94.817237],["Cochran",33.604108,-102.828526],["Jasper",30.743913,-94.024958],["Hamilton",31.704792,-98.110667],["Castro",34.530003,-102.261761],["Sterling",31.827865,-101.05007],["Starr",26.562126,-98.738349],["Crane",31.428463,-102.515642],["Morris",33.113685,-94.732051],["Briscoe",34.53041,-101.208577],["Tom Green",31.404444,-100.462068],["Menard",30.889818,-99.820615],["Parker",32.778523,-97.804722],["Walker",30.738995,-95.572242],["Brooks",27.031567,-98.218741],["La Salle",28.34621,-99.103477],["Edwards",29.982482,-100.304894],["Lee",30.310651,-96.965687],["Robertson",31.027054,-96.512726],["Young",33.176708,-98.687814],["Bee",28.417367,-97.741168],["Clay",33.783797,-98.208958],["San Jacinto",30.579489,-95.166833],["Uvalde",29.356698,-99.762031],["Haskell",33.178248,-99.730294],["Somervell",32.222295,-97.774566],["Bexar",29.448845,-98.519663],["Grayson",33.626844,-96.677649],["Bailey",34.068492,-102.829907],["Jones",32.739704,-99.878506],["Jefferson",29.884258,-94.170878],["Rusk",32.108032,-94.761696],["Glasscock",31.869424,-101.520742],["Gillespie",30.318002,-98.946272],["Fisher",32.743052,-100.40195],["Henderson",32.211881,-95.853568],["Shackelford",32.736028,-99.35403],["Palo Pinto",32.753169,-98.312995],["Wilbarger",34.08045,-99.240896],["Floyd",34.072398,-101.303304],["Orange",30.128071,-93.896538],["Runnels",31.831054,-99.976248],["Coleman",31.773294,-99.453626],["Martin",32.306058,-101.951246],["Wheeler",35.40129,-100.269763],["Culberson",31.447098,-104.517742],["Mitchell",32.30636,-100.921113],["Hudspeth",31.456137,-105.386943],["Upshur",32.736283,-94.94132],["Liberty",30.151532,-94.812093],["Williamson",30.648349,-97.601055],["Nacogdoches",31.616041,-94.615878],["Loving",31.84913,-103.579906],["Jim Wells",27.731311,-98.089865],["Upton",31.36854,-102.043001],["Newton",30.7862,-93.74463],["Lamar",33.667462,-95.571108],["Polk",30.79251,-94.829949],["Collin",33.187891,-96.572489],["Hardeman",34.288652,-99.745385],["McMullen",28.353511,-98.568423],["Cottle",34.077657,-100.278698],["Frio",28.867268,-99.10826],["Gray",35.401307,-100.812475],["Dallam",36.277771,-102.602165],["Kenedy",26.924094,-97.681378],["Fort Bend",29.527633,-95.770906],["Armstrong",34.965221,-101.357241],["Collingsworth",34.964985,-100.270073],["Cass",33.077504,-94.343488],["Sherman",36.277658,-101.893382],["Terry",33.173737,-102.335157],["Limestone",31.545419,-96.580567],["Real",29.831827,-99.822159],["Lynn",33.176855,-101.816024],["Lavaca",29.38437,-96.93021],["Nolan",32.303472,-100.406099],["Gaines",32.740745,-102.635125],["Montgomery",30.300224,-95.503014],["Concho",31.326452,-99.864134],["Hardin",30.332384,-94.390214],["Harris",29.859671,-95.397821],["Leon",31.296557,-95.995543],["Bowie",33.445728,-94.423243],["Kaufman",32.599278,-96.287793],["Anderson",31.813215,-95.652518],["San Saba",31.155205,-98.817543],["Schleicher",30.896611,-100.538097],["Colorado",29.620854,-96.526308],["Milam",30.786253,-96.976835],["Live Oak",28.351437,-98.124745],["Borden",32.743692,-101.431753],["McCulloch",31.198968,-99.34755],["Johnson",32.378999,-97.366605],["Montague",33.674963,-97.72467],["Stonewall",33.178422,-100.255259],["Comal",29.808164,-98.278145],["Eastland",32.327393,-98.832571],["Comanche",31.949064,-98.558415],["King",33.616419,-100.255858],["Washington",30.21453,-96.403566],["Webb",27.761025,-99.331702],["Fayette",29.876832,-96.91968],["Harrison",32.548149,-94.371557],["Presidio",29.999778,-104.240555],["Austin",29.887112,-96.277918],["Randall",34.965943,-101.896853],["Hood",32.431079,-97.832803],["Victoria",28.796406,-96.971766],["Hutchinson",35.840009,-101.354726],["Coryell",31.390876,-97.799188],["Jackson",28.956031,-96.578833],["Taylor",32.301382,-99.890039],["Zapata",27.000891,-99.168601],["San Patricio",28.009222,-97.518599],["Grimes",30.543607,-95.985573],["Lamb",34.068612,-102.351709]];
+
+function nearestCountyToLonLat(lon, lat) {
+  let best = null;
+  let bestDist = Infinity;
+  // Simple squared-distance in degree-space, scaled by cos(latitude) so a
+  // degree of longitude and a degree of latitude are weighted comparably
+  // (same correction makeProjector uses) -- plenty accurate for matching
+  // against county-sized centroid spacing.
+  const lonScale = Math.cos((lat * Math.PI) / 180);
+  for (const [name, cLat, cLon] of COUNTY_CENTROIDS) {
+    const dx = (lon - cLon) * lonScale;
+    const dy = lat - cLat;
+    const dist = dx * dx + dy * dy;
+    if (dist < bestDist) { bestDist = dist; best = name; }
+  }
+  return best;
+}
+
 function makeProjector(bounds, width, height, padding) {
   const { minLon, maxLon, minLat, maxLat } = bounds;
   const midLat = (minLat + maxLat) / 2;
@@ -78,11 +103,21 @@ function makeProjector(bounds, width, height, padding) {
   const scale = Math.min(usableW / spanX, usableH / spanY);
   const offsetX = padding + (usableW - spanX * scale) / 2;
   const offsetY = padding + (usableH - spanY * scale) / 2;
-  return (lon, lat) => {
+  const project = (lon, lat) => {
     const x = offsetX + (lon - minLon) * lonScale * scale;
     const y = offsetY + (maxLat - lat) * scale;
     return [x, y];
   };
+  // Inverse of the above -- turns an (x, y) point in the map's SVG user-space
+  // back into (lon, lat). Used to resolve a click anywhere on the map to a
+  // geographic coordinate, which is then matched to the nearest county
+  // centroid (see COUNTY_CENTROIDS / nearestCountyToLonLat).
+  project.invert = (x, y) => {
+    const lon = (x - offsetX) / (lonScale * scale) + minLon;
+    const lat = maxLat - (y - offsetY) / scale;
+    return [lon, lat];
+  };
+  return project;
 }
 
 function ringToPath(ring, project) {
@@ -174,6 +209,7 @@ function TexasYieldExplorer() {
   // and the prediction is scoped to it (no more statewide-with-ratio).
   const [selectedCounty, setSelectedCounty] = React.useState(null);
   const [showHistoryModal, setShowHistoryModal] = React.useState(false);
+  const [showAboutModal, setShowAboutModal] = React.useState(false);
   const [countyDetail, setCountyDetail] = React.useState(null);
   const [countyDetailLoading, setCountyDetailLoading] = React.useState(false);
   const [countyDetailError, setCountyDetailError] = React.useState('');
@@ -226,6 +262,7 @@ function TexasYieldExplorer() {
     return {
       width: W,
       height: H,
+      invert: project.invert, // SVG (x, y) -> (lon, lat), for resolving map clicks
       shapes: geoFeatures.map((f, idx) => ({
         id: f.id || `${f.__name}-${idx}`,
         name: f.__name,
@@ -233,6 +270,31 @@ function TexasYieldExplorer() {
       })),
     };
   }, [geoFeatures]);
+
+  const mapSvgRef = React.useRef(null);
+  const [lastClickInfo, setLastClickInfo] = React.useState(null);
+
+  // Resolves a click anywhere on the real map to a (lon, lat) point and
+  // selects whichever county's official centroid is nearest to it -- per
+  // Dr. Awal's request, the predicted county is always one of the 254
+  // reference centroids he supplied, not just "whichever polygon the click
+  // happened to land inside."
+  function handleMapClick(evt) {
+    const svgEl = mapSvgRef.current;
+    if (!svgEl || !projectedCounties || !projectedCounties.invert) return;
+    const pt = svgEl.createSVGPoint();
+    pt.x = evt.clientX;
+    pt.y = evt.clientY;
+    const ctm = svgEl.getScreenCTM();
+    if (!ctm) return;
+    const userPt = pt.matrixTransform(ctm.inverse());
+    const [lon, lat] = projectedCounties.invert(userPt.x, userPt.y);
+    const match = nearestCountyToLonLat(lon, lat);
+    if (match) {
+      setLastClickInfo({ lon, lat, county: match });
+      handleCountyClick(match);
+    }
+  }
 
   const modelsForCrop = React.useMemo(() => {
     if (!meta) return [];
@@ -527,11 +589,22 @@ function TexasYieldExplorer() {
               Predict corn and cotton yield from climate inputs, using the trained random forest models. Connect to the backend below to run real predictions.
             </p>
           </div>
-          <img
-            src={LOGO_DATA_URI}
-            alt="Texas Yield Explorer — Developed by CAFNR, PVAMU"
-            style={{ height: 64, width: 'auto', flex: '0 0 auto', marginTop: 2 }}
-          />
+          <div style={{ flex: '0 0 auto', textAlign: 'right' }}>
+            <img
+              src={LOGO_DATA_URI}
+              alt="Texas Yield Explorer — Developed by CAFNR, PVAMU"
+              style={{ height: 64, width: 'auto', marginTop: 2 }}
+            />
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowAboutModal(true)}
+                style={{ background: 'none', border: 'none', color: COLORS.tealDeep, fontSize: 13, padding: '6px 0 0', cursor: 'pointer', textDecoration: 'underline' }}
+              >
+                About
+              </button>
+            </div>
+          </div>
         </div>
 
         <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 18, marginBottom: 20 }}>
@@ -704,11 +777,23 @@ function TexasYieldExplorer() {
                 {geoFeatures ? 'Actual Texas county boundaries, colored by historical average.' : geoLoading ? 'Loading county boundaries…' : 'Could not load real county boundaries — showing a simplified representative layout instead.'}
               </div>
               <div style={{ fontSize: 11, color: COLORS.goldDeep, marginBottom: 12, fontStyle: 'italic' }}>
-                Click a county on the map (or use the County dropdown on the left) to select it as the county you want to predict for.
+                Click anywhere on the map (or use the County dropdown on the left) to select the nearest county's official centroid as the county you want to predict for.
               </div>
 
+              {lastClickInfo && (
+                <div style={{ fontSize: 12, color: COLORS.tealDeep, background: COLORS.cream, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: '8px 10px', marginBottom: 12 }}>
+                  Last click: {lastClickInfo.lat.toFixed(4)}°N, {Math.abs(lastClickInfo.lon).toFixed(4)}°W → nearest centroid is <strong>{lastClickInfo.county} County</strong>.
+                </div>
+              )}
+
               {projectedCounties ? (
-                <svg width="100%" viewBox={`0 0 ${projectedCounties.width} ${projectedCounties.height}`}>
+                <svg
+                  ref={mapSvgRef}
+                  width="100%"
+                  viewBox={`0 0 ${projectedCounties.width} ${projectedCounties.height}`}
+                  onClick={handleMapClick}
+                  style={{ cursor: 'pointer' }}
+                >
                   {projectedCounties.shapes.map((s) => {
                     const fill = counties ? yieldColor(s.name) : COLORS.border;
                     const isHovered = hovered === s.name;
@@ -721,10 +806,8 @@ function TexasYieldExplorer() {
                         stroke={isSelected ? COLORS.tealDeep : (isHovered ? COLORS.ink : '#FFFFFF')}
                         strokeWidth={isSelected ? 2.2 : (isHovered ? 1.6 : 0.4)}
                         opacity={counties ? 0.92 : 0.6}
-                        style={{ cursor: 'pointer' }}
                         onMouseEnter={() => setHovered(s.name)}
                         onMouseLeave={() => setHovered(null)}
-                        onClick={() => handleCountyClick(s.name)}
                       />
                     );
                   })}
@@ -976,6 +1059,73 @@ function TexasYieldExplorer() {
                 </div>
               );
             })()}
+          </div>
+        </div>
+      )}
+
+      {showAboutModal && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(43,27,61,0.45)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, zIndex: 50,
+          }}
+          onClick={() => setShowAboutModal(false)}
+        >
+          <div
+            style={{
+              background: COLORS.panel, borderRadius: 12, padding: 24, maxWidth: 640, width: '100%',
+              maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+              <h2 style={{ fontFamily: FONT_HEAD, fontSize: 22, margin: 0, color: COLORS.tealDeep }}>About Texas Yield Explorer</h2>
+              <button
+                onClick={() => setShowAboutModal(false)}
+                style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: COLORS.inkSoft, lineHeight: 1 }}
+              >×</button>
+            </div>
+
+            <p style={{ fontSize: 13.5, lineHeight: 1.6, color: COLORS.ink, marginTop: 0 }}>
+              County-level corn and cotton yields in Texas vary across years and regions, highlighting the need for tools
+              combining trends, climate information, and predictive modeling. This study links crop-yield analyses with
+              Texas Yield Explorer (TYE), a web application covering all Texas counties. For cotton, yield data from
+              1968–2025 were evaluated using multiple linear regression, LASSO, support vector machine, Random Forest (RF),
+              and XGBoost across cumulative May–October climate windows. RF showed the best statewide full-season
+              performance (R² = 0.690; RMSE = 153.09 lb acre⁻¹; MAE = 109.48 lb acre⁻¹; PBIAS = 0.77%). By May–June, RF
+              achieved R² = 0.656, retaining about 95% of full-season predictive performance. Full-season RF performance
+              reached R² = 0.759 in the High Plains, while May–September reached R² = 0.737 in North Central Texas.
+              Parallel corn analyses are examining yield and climate trends for county-level prediction. Based on model
+              performance, RF was implemented in TYE to generate county-specific corn and cotton yield predictions using
+              historical data, climate information, and user inputs. TYE also visualizes historical yield and climate
+              data to support decisions across Texas.
+            </p>
+
+            <h3 style={{ fontFamily: FONT_HEAD, fontSize: 15, color: COLORS.tealDeep, margin: '18px 0 6px' }}>Funding</h3>
+            <p style={{ fontSize: 13.5, lineHeight: 1.6, color: COLORS.ink, margin: 0 }}>
+              Texas Yield Explorer (TYE) was developed as a part of ongoing National Aeronautics and Space Administration
+              (NASA), Minority University Research and Education Project (MUREP), Earth System Science Research (ESSR)
+              funded project — "FARMGO: Enhancing Climate-Resilient Agriculture and ENSO Preparedness through NASA Data
+              Integration and AI Geovisualization" (Award No. 80NSSC25M0074).
+            </p>
+
+            <h3 style={{ fontFamily: FONT_HEAD, fontSize: 15, color: COLORS.tealDeep, margin: '18px 0 6px' }}>Contact details</h3>
+            <p style={{ fontSize: 13.5, lineHeight: 1.6, color: COLORS.ink, margin: 0 }}>
+              Ripendra Awal, Professor<br />
+              College of Agriculture Food and Natural Resources (CAFNR)<br />
+              Prairie View A&amp;M University<br />
+              Phone: (936) 261-5092<br />
+              Email: <a href="mailto:riawal@pvamu.edu" style={{ color: COLORS.tealDeep }}>riawal@pvamu.edu</a>
+            </p>
+
+            <h3 style={{ fontFamily: FONT_HEAD, fontSize: 15, color: COLORS.tealDeep, margin: '18px 0 6px' }}>Disclaimer</h3>
+            <p style={{ fontSize: 12.5, lineHeight: 1.6, color: COLORS.inkSoft, margin: 0, fontStyle: 'italic' }}>
+              The yield estimates and predictions provided by Texas Yield Explorer are intended for informational and
+              reference purposes only. Results are based on available historical, environmental, and modeled data and
+              may contain uncertainty. Actual crop yields may vary due to weather, soil conditions, management practices,
+              pests, diseases, and other factors. The accuracy of the results is not guaranteed, and users should not
+              rely solely on this tool for production, financial, or management decisions.
+            </p>
           </div>
         </div>
       )}
