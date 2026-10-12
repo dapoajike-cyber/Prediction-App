@@ -1,0 +1,50 @@
+# Keeps the app's county climate current. Runs monthly (and on demand from the
+# Actions tab). Each run: fetch whatever PRISM has newly published for the
+# current year, rebuild the climate JSON files, and commit them. Render
+# auto-deploys the backend on that commit. If PRISM has nothing new, nothing
+# is committed.
+#
+# To update only once a year instead, change the cron line to:  '0 14 20 1 *'
+# (Jan 20). Note: the in-progress year will then not advance during the
+# growing season, so farmers would not see newly published months.
+name: Update PRISM climate data
+
+on:
+  schedule:
+    - cron: '0 14 20 * *'      # 20th of every month, 14:00 UTC
+  workflow_dispatch: {}         # "Run workflow" button
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-update.txt
+
+      - name: Install
+        run: pip install -r requirements-update.txt
+
+      # Re-fetches the last 7 months because PRISM revises recent months; see README_UPDATE.md.
+      - name: Fetch new PRISM data and rebuild climate files
+        run: python update_prism_data.py --fetch
+
+      - name: Commit changes (if any)
+        run: |
+          if git diff --quiet -- county_monthly_climate.json county_details_Cotton.json county_details_Corn.json; then
+            echo "No new PRISM data -- nothing to commit."
+          else
+            git config user.name  "prism-update-bot"
+            git config user.email "prism-update-bot@users.noreply.github.com"
+            git add county_monthly_climate.json county_details_Cotton.json county_details_Corn.json
+            git commit -m "Update county PRISM climate data ($(date -u +%Y-%m-%d))"
+            git push
+          fi

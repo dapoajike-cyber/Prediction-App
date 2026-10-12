@@ -1,0 +1,7 @@
+# Only needed to run update_prism_data.py --fetch (the web app itself does not need these).
+numpy
+pandas
+requests
+rasterio
+rasterstats
+geopandas
