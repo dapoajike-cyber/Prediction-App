@@ -67,7 +67,8 @@ MODEL_CACHE = OrderedDict()  # filename -> loaded model dict (LRU)
 # the free-tier host, so this trades a small amount of lookup code for a
 # large reduction in loaded memory.
 COUNTY_CLIMATE_COLS = []      # e.g. ['ppt_Jan', ..., 'vpdmax_Dec']
-COUNTY_MONTHLY_CLIMATE = {}   # county -> {'years': [...], 'data': [[...], ...]}
+COUNTY_MONTHLY_CLIMATE = {}   # county -> {'years': [...], 'data': [[...], ...], optional 'partial': {...}}
+COUNTY_CLIMATE_META = {}      # optional: last_complete_year, partial_year, observed_through
 COUNTY_DEFAULT_REGION = {}    # county -> best-matching modeled region
 
 
@@ -114,8 +115,11 @@ if os.path.exists(county_monthly_climate_path):
         raw = json.load(f)
     COUNTY_CLIMATE_COLS = raw['cols']
     COUNTY_MONTHLY_CLIMATE = raw['counties']
+    # Optional: describes the in-progress current year, if the data file has
+    # one (written by update_prism_data.py). Absent in older data files.
+    COUNTY_CLIMATE_META = raw.get('meta', {})
     print(f'Loaded full monthly climate for {len(COUNTY_MONTHLY_CLIMATE)} counties '
-          f'({len(COUNTY_CLIMATE_COLS)} columns/year).')
+          f'({len(COUNTY_CLIMATE_COLS)} columns/year). Meta: {COUNTY_CLIMATE_META}')
 else:
     print('WARNING: county_monthly_climate.json not found -- per-county predictions unavailable.')
 
@@ -213,7 +217,13 @@ def meta():
     all_models = []
     for crop in CROPS:
         all_models.extend(META.get(crop, []))
-    return jsonify({'available_models': all_models})
+    # Describes how current the county climate file is, so the frontend can
+    # label the in-progress year. Empty dict for older data files.
+    last_complete = COUNTY_CLIMATE_META.get('last_complete_year')
+    climate_data = dict(COUNTY_CLIMATE_META)
+    if last_complete is not None:
+        climate_data['max_prediction_year'] = last_complete + MAX_EXTRAPOLATION_YEARS
+    return jsonify({'available_models': all_models, 'climate_data': climate_data})
 
 
 @app.route('/predict', methods=['POST'])
@@ -338,52 +348,136 @@ def _default_region_for_county(county):
     return 'All Texas'
 
 
+MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+
+def _column_trend_value(years, series, year):
+    """Linear trend (per county, per column) evaluated at `year`, fit on the
+    complete historical years only. None if there is too little data."""
+    xs = [yr for yr, v in zip(years, series) if v is not None]
+    ys = [v for v in series if v is not None]
+    if len(xs) < 2:
+        return None
+    coeffs = np.polyfit(np.array(xs), np.array(ys), deg=1)
+    return float(np.polyval(coeffs, year))
+
+
+def _resolve_county_climate(county, year, only_cols=None):
+    """Single source of truth for 'what climate do we use for this county+year?'.
+
+    Returns (info, None) on success or (None, (status, body)) on failure.
+    info = {
+      'climate': {col: value},
+      'mode': 'recorded' | 'partial' | 'extrapolated',
+      'max_known_year': last COMPLETE recorded year for the county,
+      'observed_months': months (of the in-progress year) that have real data,
+      'estimated_months': months filled from the county trend,
+    }
+
+    * recorded     -- a complete historical year: real PRISM values.
+    * partial      -- the current, in-progress year: months PRISM has published
+                      are used as-is; the remaining months are filled from the
+                      county's own trend (same method as future years).
+    * extrapolated -- a future year: every month from the county's own trend,
+                      limited to MAX_EXTRAPOLATION_YEARS past the last COMPLETE
+                      year (so a half-finished year never moves the cap).
+    """
+    rec = _find_county_climate_raw(county)
+    if rec is None:
+        return None, (404, {'detail': f'No climate data available for county "{county}".'})
+    years = rec['years']
+    max_known_year = max(years)
+    cols = COUNTY_CLIMATE_COLS
+
+    if year in years:
+        row = rec['data'][years.index(year)]
+        return {'climate': dict(zip(cols, row)), 'mode': 'recorded',
+                'max_known_year': max_known_year,
+                'observed_months': [], 'estimated_months': []}, None
+
+    if year > max_known_year + MAX_EXTRAPOLATION_YEARS:
+        return None, (400, _extrapolation_limit_error(county, year, max_known_year))
+
+    idx_by_col = {c: i for i, c in enumerate(cols)}
+    wanted = [c for c in cols if (only_cols is None or c in only_cols)]
+
+    def trend_for(col):
+        i = idx_by_col[col]
+        return _column_trend_value(years, [row[i] for row in rec['data']], year)
+
+    partial = rec.get('partial')
+    if partial and partial.get('year') == year:
+        prow = partial['data']
+        climate, filled_cols = {}, set()
+        for col in wanted:
+            v = prow[idx_by_col[col]]
+            if v is None:
+                v = trend_for(col)
+                filled_cols.add(col)
+            if v is not None:
+                climate[col] = v
+        # A month counts as "recorded" only if all of its variables are real.
+        observed, estimated = [], []
+        for m in MONTHS:
+            month_cols = [c for c in cols if c.endswith('_' + m)]
+            if all(prow[idx_by_col[c]] is not None for c in month_cols):
+                observed.append(m)
+            else:
+                estimated.append(m)
+        return {'climate': climate, 'mode': 'partial', 'max_known_year': max_known_year,
+                'observed_months': observed, 'estimated_months': estimated}, None
+
+    climate = {}
+    for col in wanted:
+        v = trend_for(col)
+        if v is not None:
+            climate[col] = v
+    return {'climate': climate, 'mode': 'extrapolated', 'max_known_year': max_known_year,
+            'observed_months': [], 'estimated_months': []}, None
+
+
+def _window_months(feat_cols):
+    """Month abbreviations a model actually uses, in calendar order."""
+    used = {c.rsplit('_', 1)[-1] for c in feat_cols if c != 'CO2_ppm'}
+    return [m for m in MONTHS if m in used]
+
+
 @app.route('/county_climate', methods=['GET'])
 def county_climate():
-    """Returns one county's own recorded monthly climate for a given year
-    (all 12 months x 7 variables) -- used to auto-fill the manual climate
-    entry fields with that county's real data, and as the source for
-    per-county 'Pick a year' predictions. Real PRISM climate, independent of
-    whether that county had a reported crop yield that year."""
+    """Returns one county's climate for a given year (all 12 months x 7
+    variables) -- used to auto-fill the manual climate entry fields, and as
+    the source for per-county 'Pick a year' predictions. Complete historical
+    years are real PRISM data. The current in-progress year uses the months
+    PRISM has published so far, with the rest filled from the county's own
+    trend. Later years are fully extrapolated (capped)."""
     county = request.args.get('county')
     year = request.args.get('year', type=int)
     if not county or year is None:
         return jsonify({'detail': 'county and year are required.'}), 400
 
-    climate = _county_year_climate(county, year)
-    if climate is not None:
-        return jsonify({'county': county, 'year': year, 'climate': climate, 'estimated': False})
+    info, err = _resolve_county_climate(county, year)
+    if err:
+        return jsonify(err[1]), err[0]
 
-    # Beyond the historical record -- extrapolate that COUNTY's own trend
-    # (not a regional average), so a future-year prediction for one county
-    # still reflects its own climate trajectory. Capped at
-    # MAX_EXTRAPOLATION_YEARS past that county's last recorded year.
-    years, by_col = _county_climate_column_series(county)
-    if years is None:
-        return jsonify({'detail': f'No climate data available for county "{county}".'}), 404
-    max_known_year = max(years)
-    if year > max_known_year + MAX_EXTRAPOLATION_YEARS:
-        return jsonify(_extrapolation_limit_error(county, year, max_known_year)), 400
-    estimated = {}
-    for col, vals in by_col.items():
-        xs = [yr for yr, v in zip(years, vals) if v is not None]
-        ys = [v for v in vals if v is not None]
-        if len(xs) >= 2:
-            coeffs = np.polyfit(np.array(xs), np.array(ys), deg=1)
-            estimated[col] = round(float(np.polyval(coeffs, year)), 2)
-        else:
-            estimated[col] = None
-    return jsonify({'county': county, 'year': year, 'climate': estimated, 'estimated': True,
-                     'max_known_year': max(years)})
+    climate = info['climate'] if info['mode'] == 'recorded' else {
+        k: (round(v, 2) if v is not None else None) for k, v in info['climate'].items()}
+    body = {'county': county, 'year': year, 'climate': climate,
+            'estimated': info['mode'] == 'extrapolated',
+            'partial': info['mode'] == 'partial',
+            'max_known_year': info['max_known_year']}
+    if info['mode'] == 'partial':
+        body['observed_months'] = info['observed_months']
+        body['estimated_months'] = info['estimated_months']
+    return jsonify(body)
 
 
 @app.route('/predict_year', methods=['POST'])
 def predict_year():
     """Predict yield for a given YEAR AND COUNTY, using that county's own
-    recorded climate (or, for years beyond the historical record, that
-    county's own extrapolated trend) run through the selected region's
-    trained model. This is a real prediction for that specific county, not
-    a regional prediction scaled by a historical ratio."""
+    climate (recorded, current-year-so-far, or extrapolated -- see
+    _resolve_county_climate) run through the selected region's trained model.
+    This is a real prediction for that specific county, not a regional
+    prediction scaled by a historical ratio."""
     data = request.get_json(force=True)
     crop = data.get('crop')
     region = data.get('region')
@@ -399,32 +493,32 @@ def predict_year():
     if not county:
         return jsonify({'detail': 'county is required.'}), 400
 
-    climate_for_year = _county_year_climate(county, year)
+    feat_cols = [c for c in entry['feat_cols'] if c != 'CO2_ppm']
+    info, err = _resolve_county_climate(county, year, only_cols=set(feat_cols))
+    if err:
+        return jsonify(err[1]), err[0]
+    climate_for_year = info['climate']
+    mode = info['mode']
 
-    if climate_for_year is not None:
+    window = _window_months(entry['feat_cols'])
+    observed_in_window = [m for m in window if m in info['observed_months']]
+    estimated_in_window = [m for m in window if m in info['estimated_months']]
+
+    if mode == 'recorded':
         note = f'Using actual recorded climate data for {county} County, {year}.'
-        estimated = False
+    elif mode == 'partial':
+        if estimated_in_window:
+            note = (f'{year} is still in progress. Using {county} County\'s recorded climate for '
+                    f'{", ".join(observed_in_window) if observed_in_window else "none of the growing-season months"}'
+                    f'; {", ".join(estimated_in_window)} not yet available and estimated from the '
+                    f'county\'s own historical trend. The prediction will firm up as more months are published.')
+        else:
+            note = (f'Using {county} County\'s recorded {year} climate for the full growing window '
+                    f'({", ".join(window)}).')
     else:
-        years, by_col = _county_climate_column_series(county)
-        if years is None:
-            return jsonify({'detail': f'No climate data available for county "{county}".'}), 404
-        max_known_year = max(years)
-        if year > max_known_year + MAX_EXTRAPOLATION_YEARS:
-            return jsonify(_extrapolation_limit_error(county, year, max_known_year)), 400
-        climate_for_year = {}
-        for col in entry['feat_cols']:
-            if col == 'CO2_ppm' or col not in by_col:
-                continue
-            vals = by_col[col]
-            xs = [yr for yr, v in zip(years, vals) if v is not None]
-            ys = [v for v in vals if v is not None]
-            if len(xs) >= 2:
-                coeffs = np.polyfit(np.array(xs), np.array(ys), deg=1)
-                climate_for_year[col] = float(np.polyval(coeffs, year))
         note = (f'{year} is beyond {county} County\'s historical record (data available through '
-                f'{max_known_year}). Climate is estimated by extrapolating that county\'s own '
+                f'{info["max_known_year"]}). Climate is estimated by extrapolating that county\'s own '
                 f'historical trend, not measured data. Treat as approximate.')
-        estimated = True
 
     fake_request = {
         'crop': crop, 'region': region, 'window_months_count': window_months_count,
@@ -436,7 +530,12 @@ def predict_year():
     result['note'] = note
     result['county'] = county
     result['estimated_climate'] = {k: (round(v, 2) if v is not None else None) for k, v in climate_for_year.items()}
-    result['climate_estimated'] = estimated
+    # 'estimated' only if some month the model actually uses had to be filled in.
+    result['climate_estimated'] = mode == 'extrapolated' or (mode == 'partial' and bool(estimated_in_window))
+    if mode == 'partial' and estimated_in_window:
+        result['climate_partial'] = True
+        result['observed_months'] = observed_in_window
+        result['estimated_months'] = estimated_in_window
     return jsonify(result)
 
 
