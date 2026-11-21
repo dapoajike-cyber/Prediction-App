@@ -782,12 +782,6 @@ function TexasYieldExplorer() {
                 <div style={{ fontFamily: FONT_HEAD, fontSize: 40, fontWeight: 500, color: COLORS.tealDeep }}>
                   {result.prediction} <span style={{ fontSize: 16, color: COLORS.inkSoft }}>{result.unit}</span>
                 </div>
-                <div style={{ fontSize: 13, color: COLORS.inkSoft, marginTop: 4 }}>
-                  Likely range: {result.range_low} – {result.range_high} {result.unit}
-                </div>
-                <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 6 }}>
-                  This range reflects uncertainty across the model's ensemble of trees for the climate values entered — it is not a range of possible climate scenarios.
-                </div>
                 {result.note && <div style={{ fontSize: 12, color: COLORS.goldDeep, marginTop: 10 }}>{result.note}</div>}
               </div>
             )}
